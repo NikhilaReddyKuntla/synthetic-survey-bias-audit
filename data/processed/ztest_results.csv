@@ -1,0 +1,5 @@
+race,pew_pct_hurt,llm_pct_hurt,z_score,p_value,significant
+White,59.9,55.6,-0.374,0.7086,❌ NO
+Black,44.4,77.8,2.779,0.0054,✅ YES
+Hispanic,43.8,61.1,1.45,0.1471,❌ NO
+Asian,54.6,61.1,0.529,0.5968,❌ NO

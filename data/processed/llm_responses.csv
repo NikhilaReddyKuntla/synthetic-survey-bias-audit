@@ -1,0 +1,73 @@
+age,gender,race,income,llm_response
+25-year-old,man,White,earning under $30k a year,3
+25-year-old,man,White,"earning $50,000-$75,000 a year",2
+25-year-old,man,White,earning over $100k a year,2
+25-year-old,man,Black,earning under $30k a year,3
+25-year-old,man,Black,"earning $50,000-$75,000 a year",3
+25-year-old,man,Black,earning over $100k a year,2
+25-year-old,man,Hispanic,earning under $30k a year,3
+25-year-old,man,Hispanic,"earning $50,000-$75,000 a year",3
+25-year-old,man,Hispanic,earning over $100k a year,2
+25-year-old,man,Asian,earning under $30k a year,3
+25-year-old,man,Asian,"earning $50,000-$75,000 a year",2
+25-year-old,man,Asian,earning over $100k a year,2
+25-year-old,woman,White,earning under $30k a year,3
+25-year-old,woman,White,"earning $50,000-$75,000 a year",2
+25-year-old,woman,White,earning over $100k a year,2
+25-year-old,woman,Black,earning under $30k a year,3
+25-year-old,woman,Black,"earning $50,000-$75,000 a year",3
+25-year-old,woman,Black,earning over $100k a year,2
+25-year-old,woman,Hispanic,earning under $30k a year,3
+25-year-old,woman,Hispanic,"earning $50,000-$75,000 a year",2
+25-year-old,woman,Hispanic,earning over $100k a year,2
+25-year-old,woman,Asian,earning under $30k a year,3
+25-year-old,woman,Asian,"earning $50,000-$75,000 a year",2
+25-year-old,woman,Asian,earning over $100k a year,2
+45-year-old,man,White,earning under $30k a year,3
+45-year-old,man,White,"earning $50,000-$75,000 a year",3
+45-year-old,man,White,earning over $100k a year,2
+45-year-old,man,Black,earning under $30k a year,3
+45-year-old,man,Black,"earning $50,000-$75,000 a year",3
+45-year-old,man,Black,earning over $100k a year,2
+45-year-old,man,Hispanic,earning under $30k a year,3
+45-year-old,man,Hispanic,"earning $50,000-$75,000 a year",3
+45-year-old,man,Hispanic,earning over $100k a year,2
+45-year-old,man,Asian,earning under $30k a year,3
+45-year-old,man,Asian,"earning $50,000-$75,000 a year",3
+45-year-old,man,Asian,earning over $100k a year,2
+45-year-old,woman,White,earning under $30k a year,3
+45-year-old,woman,White,"earning $50,000-$75,000 a year",3
+45-year-old,woman,White,earning over $100k a year,2
+45-year-old,woman,Black,earning under $30k a year,3
+45-year-old,woman,Black,"earning $50,000-$75,000 a year",3
+45-year-old,woman,Black,earning over $100k a year,2
+45-year-old,woman,Hispanic,earning under $30k a year,3
+45-year-old,woman,Hispanic,"earning $50,000-$75,000 a year",3
+45-year-old,woman,Hispanic,earning over $100k a year,2
+45-year-old,woman,Asian,earning under $30k a year,3
+45-year-old,woman,Asian,"earning $50,000-$75,000 a year",3
+45-year-old,woman,Asian,earning over $100k a year,2
+65-year-old,man,White,earning under $30k a year,3
+65-year-old,man,White,"earning $50,000-$75,000 a year",3
+65-year-old,man,White,earning over $100k a year,2
+65-year-old,man,Black,earning under $30k a year,3
+65-year-old,man,Black,"earning $50,000-$75,000 a year",3
+65-year-old,man,Black,earning over $100k a year,3
+65-year-old,man,Hispanic,earning under $30k a year,3
+65-year-old,man,Hispanic,"earning $50,000-$75,000 a year",3
+65-year-old,man,Hispanic,earning over $100k a year,2
+65-year-old,man,Asian,earning under $30k a year,3
+65-year-old,man,Asian,"earning $50,000-$75,000 a year",3
+65-year-old,man,Asian,earning over $100k a year,3
+65-year-old,woman,White,earning under $30k a year,3
+65-year-old,woman,White,"earning $50,000-$75,000 a year",3
+65-year-old,woman,White,earning over $100k a year,2
+65-year-old,woman,Black,earning under $30k a year,3
+65-year-old,woman,Black,"earning $50,000-$75,000 a year",3
+65-year-old,woman,Black,earning over $100k a year,3
+65-year-old,woman,Hispanic,earning under $30k a year,3
+65-year-old,woman,Hispanic,"earning $50,000-$75,000 a year",3
+65-year-old,woman,Hispanic,earning over $100k a year,2
+65-year-old,woman,Asian,earning under $30k a year,3
+65-year-old,woman,Asian,"earning $50,000-$75,000 a year",3
+65-year-old,woman,Asian,earning over $100k a year,2
