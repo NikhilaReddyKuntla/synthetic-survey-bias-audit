@@ -1,0 +1,10 @@
+data/
+docs/
+vector_store/
+*.pdf
+*.xlsx
+*.csv 
+.env 
+__pycache__/
+*.py[cod]
+.DS_Store
