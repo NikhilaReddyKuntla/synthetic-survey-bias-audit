@@ -79,6 +79,7 @@ def build_pdf_chunks(
     vision_model: str | None = None,
     vision_detail: str = "low",
     vision_image_zoom: float = 1.5,
+    local_vision_endpoint: str = "http://localhost:11434/api/chat",
 ) -> list[dict]:
     chunks: list[dict] = []
     file_name = pdf_path.name
@@ -126,6 +127,7 @@ def build_pdf_chunks(
                     model=vision_model,
                     detail=vision_detail,
                     image_zoom=vision_image_zoom,
+                    local_endpoint=local_vision_endpoint,
                 )
             except Exception as exc:
                 print(f"Skipping visual summary for {pdf_path} page {page_number} ({exc})")
@@ -157,6 +159,7 @@ def build_chunks(
     vision_model: str | None = None,
     vision_detail: str = "low",
     vision_image_zoom: float = 1.5,
+    local_vision_endpoint: str = "http://localhost:11434/api/chat",
 ) -> list[dict]:
     chunks: list[dict] = []
 
@@ -172,6 +175,7 @@ def build_chunks(
                 vision_model=vision_model,
                 vision_detail=vision_detail,
                 vision_image_zoom=vision_image_zoom,
+                local_vision_endpoint=local_vision_endpoint,
             )
         )
 
@@ -197,6 +201,7 @@ def ingest_documents(
     vision_model: str | None = None,
     vision_detail: str = "low",
     vision_image_zoom: float = 1.5,
+    local_vision_endpoint: str = "http://localhost:11434/api/chat",
 ) -> Path:
     output_path = output_path or rag_docs_path()
     chunks = build_chunks(
@@ -209,6 +214,7 @@ def ingest_documents(
         vision_model=vision_model,
         vision_detail=vision_detail,
         vision_image_zoom=vision_image_zoom,
+        local_vision_endpoint=local_vision_endpoint,
     )
     if append and output_path.exists():
         chunks = merge_chunks(read_jsonl(output_path), chunks)
@@ -234,10 +240,20 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Generate separate vision summaries for pages that appear to contain charts, figures, or graphs.",
     )
-    parser.add_argument("--vision-provider", default="groq", choices=("groq", "openai"), help="Vision LLM provider.")
+    parser.add_argument(
+        "--vision-provider",
+        default="groq",
+        choices=("groq", "local", "openai"),
+        help="Vision LLM provider.",
+    )
     parser.add_argument("--vision-model", default=None, help="Vision-capable LLM model.")
     parser.add_argument("--vision-detail", default="low", choices=("low", "high", "auto"), help="Image detail level.")
     parser.add_argument("--vision-image-zoom", type=float, default=1.5, help="PDF page render zoom for vision input.")
+    parser.add_argument(
+        "--local-vision-endpoint",
+        default="http://localhost:11434/api/chat",
+        help="Local Ollama-compatible chat endpoint for --vision-provider local.",
+    )
     parser.add_argument(
         "--output",
         type=Path,
@@ -261,6 +277,7 @@ def main() -> None:
         vision_model=args.vision_model,
         vision_detail=args.vision_detail,
         vision_image_zoom=args.vision_image_zoom,
+        local_vision_endpoint=args.local_vision_endpoint,
     )
     print(f"Wrote RAG chunks to {output_path}")
 
