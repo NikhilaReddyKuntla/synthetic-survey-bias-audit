@@ -1,0 +1,13 @@
+# Environment variables
+.env
+
+# Data files (too large for GitHub)
+data/raw/
+data/processed/
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# Python
+__pycache__/
+*.pyc
