@@ -17,8 +17,20 @@ def rag_docs_path() -> Path:
     return data_dir() / "rag_docs" / "rag_chunks.jsonl"
 
 
+def personas_path() -> Path:
+    return data_dir() / "personas" / "personas.json"
+
+
 def vector_store_dir() -> Path:
     return project_root() / "vector_store"
+
+
+def outputs_dir() -> Path:
+    return data_dir() / "outputs"
+
+
+def synthetic_responses_path() -> Path:
+    return outputs_dir() / "synthetic_responses.json"
 
 
 def ensure_parent_dir(path: Path) -> None:
@@ -34,6 +46,24 @@ def write_jsonl(path: Path, rows: Iterable[dict]) -> None:
     with path.open("w", encoding="utf-8") as handle:
         for row in rows:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def append_jsonl(path: Path, rows: Iterable[dict]) -> None:
+    ensure_parent_dir(path)
+    with path.open("a", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def write_json(path: Path, payload: object) -> None:
+    ensure_parent_dir(path)
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+
+
+def read_json(path: Path) -> object:
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
 
 
 def read_jsonl(path: Path) -> list[dict]:

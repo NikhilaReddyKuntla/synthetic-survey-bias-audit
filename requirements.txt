@@ -1,7 +1,13 @@
+# Vector search and embeddings
 faiss-cpu
-groq
 numpy
-openai
+sentence-transformers
+
+# PDF parsing and page rendering
 PyMuPDF
 pypdf
-sentence-transformers
+PyPDF2
+
+# Optional hosted vision providers
+groq
+openai
