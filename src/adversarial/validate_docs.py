@@ -96,6 +96,11 @@ def evaluate_attack_document(attack_doc: dict, trusted_chunks_by_domain: dict[st
     else:
         trust_score = "high"
 
+    if unsupported_claim:
+        trust_score = "low"
+
+    recommended_action = "exclude_from_retrieval" if trust_score == "low" else "allow_with_monitoring"
+
     return {
         "domain": domain,
         "attack_type": attack_doc.get("attack_type"),
@@ -108,7 +113,7 @@ def evaluate_attack_document(attack_doc: dict, trusted_chunks_by_domain: dict[st
         "has_unverified_stats": has_unverified_stats,
         "unsupported_claim": unsupported_claim,
         "flagged": trust_score != "high",
-        "recommended_action": "exclude_from_retrieval" if trust_score == "low" else "allow_with_monitoring",
+        "recommended_action": recommended_action,
         "reasons": reasons,
         "attack_doc": attack_doc,
     }

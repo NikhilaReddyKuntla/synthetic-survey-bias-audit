@@ -77,6 +77,24 @@ Used to compare improvements from the proposed framework.
 
 ---
 
+## LLM Provider Selection
+
+Text generation defaults to Groq, but you can select Groq or DeepSeek from the command line:
+
+```bash
+python3 -m src.generation.generate_responses --provider groq --question "How do customers feel about pricing?"
+python3 -m src.generation.generate_responses --provider deepseek --question "How do customers feel about pricing?"
+```
+
+For the adversarial experiment:
+
+```bash
+python3 -m src.adversarial.run_attack_experiment --provider deepseek --question "How do customers feel about pricing?"
+```
+
+DeepSeek uses the OpenAI-compatible client and expects `DEEPSEEK_API_KEY` in your environment. You can override the default `deepseek-chat` model with `--model`.
+
+---
 
 
 

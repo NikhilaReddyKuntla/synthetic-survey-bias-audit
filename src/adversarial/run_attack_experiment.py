@@ -18,6 +18,7 @@ from src.attacks.poison_utils import (
 )
 from src.generation.generate_responses import (
     DEFAULT_LOCAL_ENDPOINT,
+    GENERATION_PROVIDERS,
     call_generation_model,
     load_persona,
     load_personas,
@@ -247,7 +248,7 @@ def parse_args() -> argparse.Namespace:
         type=int,
         help="Maximum number of question-persona cases to run. Each case makes 2 LLM calls in non-dry-run mode.",
     )
-    parser.add_argument("--provider", default="groq", choices=("groq", "local", "openai"), help="Generation provider.")
+    parser.add_argument("--provider", default="groq", choices=GENERATION_PROVIDERS, help="Generation provider.")
     parser.add_argument("--model", default=None, help="Model name for selected provider.")
     parser.add_argument("--local-endpoint", default=DEFAULT_LOCAL_ENDPOINT, help="Local Ollama-compatible endpoint.")
     parser.add_argument(
