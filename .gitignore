@@ -1,13 +1,10 @@
-# Environment variables
-.env
-
-# Data files (too large for GitHub)
-data/raw/
-
-
-# Jupyter checkpoints
-.ipynb_checkpoints/
-
-# Python
+data/
+docs/
+vector_store/
+*.pdf
+*.xlsx
+*.csv 
+.env 
 __pycache__/
-*.pyc
+*.py[cod]
+.DS_Store
