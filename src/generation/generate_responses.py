@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
+from sentence_transformers import SentenceTransformer
+
+from src.rag.embed import DEFAULT_MODEL, load_embedding_model
 from src.rag.retrieve import format_retrieved_context, retrieve_chunks, retrieve_chunks_with_priority
 from src.utils.helpers import personas_path, read_json, read_jsonl, synthetic_responses_path, write_json
 from src.utils.prompt_templates import build_survey_response_prompt
@@ -14,6 +18,9 @@ DEFAULT_LOCAL_ENDPOINT = "http://localhost:11434/api/chat"
 DEFAULT_LOCAL_MODEL = "llama3.1"
 DEFAULT_GROQ_MODEL = "llama-3.1-8b-instant"
 DEFAULT_OPENAI_MODEL = "gpt-4.1-mini"
+DEFAULT_DEEPSEEK_MODEL = "deepseek-chat"
+DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+GENERATION_PROVIDERS = ("groq", "deepseek", "local", "openai")
 
 
 def load_persona(persona_json: str | None = None, persona_file: Path | None = None) -> dict | None:
@@ -106,6 +113,29 @@ def generate_with_openai(prompt: str, model: str = DEFAULT_OPENAI_MODEL) -> str:
     return getattr(response, "output_text", "").strip()
 
 
+def generate_with_deepseek(prompt: str, model: str = DEFAULT_DEEPSEEK_MODEL) -> str:
+    try:
+        from openai import OpenAI
+    except ImportError as exc:
+        raise RuntimeError("DeepSeek generation requires `openai`. Install with `pip install -r requirements.txt`.") from exc
+
+    api_key = os.environ.get("DEEPSEEK_API_KEY")
+    if not api_key:
+        raise RuntimeError("DeepSeek generation requires DEEPSEEK_API_KEY to be set in your environment.")
+
+    client = OpenAI(
+        api_key=api_key,
+        base_url=os.environ.get("DEEPSEEK_BASE_URL", DEFAULT_DEEPSEEK_BASE_URL),
+    )
+    completion = client.chat.completions.create(
+        model=model,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.7,
+        max_tokens=500,
+    )
+    return (completion.choices[0].message.content or "").strip()
+
+
 def generate_with_local(
     prompt: str,
     model: str = DEFAULT_LOCAL_MODEL,
@@ -144,11 +174,13 @@ def call_generation_model(
 ) -> str:
     if provider == "groq":
         return generate_with_groq(prompt, model=model or DEFAULT_GROQ_MODEL)
+    if provider == "deepseek":
+        return generate_with_deepseek(prompt, model=model or DEFAULT_DEEPSEEK_MODEL)
     if provider == "local":
         return generate_with_local(prompt, model=model or DEFAULT_LOCAL_MODEL, endpoint=local_endpoint)
     if provider == "openai":
         return generate_with_openai(prompt, model=model or DEFAULT_OPENAI_MODEL)
-    raise ValueError("Unsupported generation provider. Expected 'groq', 'local', or 'openai'.")
+    raise ValueError(f"Unsupported generation provider. Expected one of: {', '.join(GENERATION_PROVIDERS)}.")
 
 
 def generate_response(
@@ -158,6 +190,8 @@ def generate_response(
     persona: dict | None = None,
     provider: str = "groq",
     model: str | None = None,
+    embedding_model_name: str = DEFAULT_MODEL,
+    embedding_model: SentenceTransformer | None = None,
     local_endpoint: str = DEFAULT_LOCAL_ENDPOINT,
     dry_run: bool = False,
     upload_purpose: str | None = None,
@@ -168,11 +202,19 @@ def generate_response(
             query=question,
             top_k=top_k,
             domain=domain,
+            model_name=embedding_model_name,
+            embedding_model=embedding_model,
             upload_purpose=upload_purpose,
             upload_ids=upload_ids,
         )
     else:
-        chunks = retrieve_chunks(query=question, top_k=top_k, domain=domain)
+        chunks = retrieve_chunks(
+            query=question,
+            top_k=top_k,
+            domain=domain,
+            model_name=embedding_model_name,
+            embedding_model=embedding_model,
+        )
     retrieved_context = format_retrieved_context(chunks)
     prompt = build_survey_response_prompt(
         question=question,
@@ -194,6 +236,7 @@ def generate_response(
         "persona": persona,
         "provider": provider,
         "model": model,
+        "embedding_model": embedding_model_name,
         "top_k": top_k,
         "retrieved_sources": source_refs(chunks),
         "prompt": prompt,
@@ -211,12 +254,14 @@ def generate_responses(
     top_k: int = 3,
     provider: str = "groq",
     model: str | None = None,
+    embedding_model_name: str = DEFAULT_MODEL,
     local_endpoint: str = DEFAULT_LOCAL_ENDPOINT,
     dry_run: bool = False,
     upload_purpose: str | None = None,
     upload_ids: list[str] | None = None,
 ) -> list[dict]:
     records: list[dict] = []
+    embedding_model = load_embedding_model(embedding_model_name)
     for question in questions:
         for persona in personas:
             records.append(
@@ -227,6 +272,8 @@ def generate_responses(
                     persona=persona,
                     provider=provider,
                     model=model,
+                    embedding_model_name=embedding_model_name,
+                    embedding_model=embedding_model,
                     local_endpoint=local_endpoint,
                     dry_run=dry_run,
                     upload_purpose=upload_purpose,
@@ -246,8 +293,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--persona-file", type=Path, help="Optional JSONL persona file. Uses the first record.")
     parser.add_argument("--personas", type=Path, default=personas_path(), help="Personas JSON file.")
     parser.add_argument("--limit-personas", type=int, help="Only generate for the first N personas.")
-    parser.add_argument("--provider", default="groq", choices=("groq", "local", "openai"), help="Generation provider.")
+    parser.add_argument("--provider", default="groq", choices=GENERATION_PROVIDERS, help="Generation provider.")
     parser.add_argument("--model", default=None, help="Generation model. Defaults depend on provider.")
+    parser.add_argument("--embedding-model", default=DEFAULT_MODEL, help="Embedding model for retrieval.")
     parser.add_argument("--local-endpoint", default=DEFAULT_LOCAL_ENDPOINT, help="Local Ollama-compatible chat endpoint.")
     parser.add_argument("--output", type=Path, default=synthetic_responses_path(), help="JSON output path.")
     parser.add_argument(
@@ -309,6 +357,7 @@ def main() -> None:
         top_k=args.top_k,
         provider=args.provider,
         model=args.model,
+        embedding_model_name=args.embedding_model,
         local_endpoint=args.local_endpoint,
         dry_run=args.dry_run,
         upload_purpose=args.user_doc_purpose,
