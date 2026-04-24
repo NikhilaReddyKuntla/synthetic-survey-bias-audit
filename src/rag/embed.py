@@ -24,7 +24,6 @@ def load_embedding_model(model_name: str) -> "SentenceTransformer":
             "Sentence-Transformers is required for embeddings. "
             "Install dependencies with `pip install -r requirements.txt`."
         ) from exc
-
     try:
         return SentenceTransformer(model_name)
     except Exception as exc:
