@@ -6,13 +6,13 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from src.rag.retrieve import format_retrieved_context, retrieve_chunks
+from src.rag.retrieve import format_retrieved_context, retrieve_chunks, retrieve_chunks_with_priority
 from src.utils.helpers import personas_path, read_json, read_jsonl, synthetic_responses_path, write_json
 from src.utils.prompt_templates import build_survey_response_prompt
 
 DEFAULT_LOCAL_ENDPOINT = "http://localhost:11434/api/chat"
 DEFAULT_LOCAL_MODEL = "llama3.1"
-DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
+DEFAULT_GROQ_MODEL = "llama-3.1-8b-instant"
 DEFAULT_OPENAI_MODEL = "gpt-4.1-mini"
 
 
@@ -63,6 +63,10 @@ def source_refs(chunks: list[dict]) -> list[dict]:
             "chunk_type": chunk.get("chunk_type", "text"),
             "domain": chunk.get("domain"),
             "source_file": chunk.get("source_file"),
+            "source_kind": chunk.get("source_kind"),
+            "trust_score": chunk.get("trust_score"),
+            "upload_id": chunk.get("upload_id"),
+            "upload_purpose": chunk.get("upload_purpose"),
             "year": chunk.get("year"),
             "page_number": chunk.get("page_number"),
         }
@@ -156,8 +160,19 @@ def generate_response(
     model: str | None = None,
     local_endpoint: str = DEFAULT_LOCAL_ENDPOINT,
     dry_run: bool = False,
+    upload_purpose: str | None = None,
+    upload_ids: list[str] | None = None,
 ) -> dict:
-    chunks = retrieve_chunks(query=question, top_k=top_k, domain=domain)
+    if upload_purpose or upload_ids:
+        chunks = retrieve_chunks_with_priority(
+            query=question,
+            top_k=top_k,
+            domain=domain,
+            upload_purpose=upload_purpose,
+            upload_ids=upload_ids,
+        )
+    else:
+        chunks = retrieve_chunks(query=question, top_k=top_k, domain=domain)
     retrieved_context = format_retrieved_context(chunks)
     prompt = build_survey_response_prompt(
         question=question,
@@ -184,6 +199,8 @@ def generate_response(
         "prompt": prompt,
         "response": response_text,
         "dry_run": dry_run,
+        "upload_purpose": upload_purpose,
+        "upload_ids": upload_ids or [],
     }
 
 
@@ -196,6 +213,8 @@ def generate_responses(
     model: str | None = None,
     local_endpoint: str = DEFAULT_LOCAL_ENDPOINT,
     dry_run: bool = False,
+    upload_purpose: str | None = None,
+    upload_ids: list[str] | None = None,
 ) -> list[dict]:
     records: list[dict] = []
     for question in questions:
@@ -210,6 +229,8 @@ def generate_responses(
                     model=model,
                     local_endpoint=local_endpoint,
                     dry_run=dry_run,
+                    upload_purpose=upload_purpose,
+                    upload_ids=upload_ids,
                 )
             )
     return records
@@ -229,6 +250,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", default=None, help="Generation model. Defaults depend on provider.")
     parser.add_argument("--local-endpoint", default=DEFAULT_LOCAL_ENDPOINT, help="Local Ollama-compatible chat endpoint.")
     parser.add_argument("--output", type=Path, default=synthetic_responses_path(), help="JSON output path.")
+    parser.add_argument(
+        "--user-doc",
+        type=Path,
+        action="append",
+        dest="user_docs",
+        help="User-uploaded document to validate and prioritize during retrieval. Can be provided multiple times.",
+    )
+    parser.add_argument(
+        "--user-doc-purpose",
+        default=None,
+        help="Purpose label used to prioritize the current uploaded documents during retrieval.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Build prompt and retrieve context without calling an LLM.")
     return parser.parse_args()
 
@@ -247,6 +280,28 @@ def main() -> None:
     if not personas:
         raise ValueError("No personas available for generation.")
 
+    upload_ids: list[str] = []
+    validation_report: dict | None = None
+    if args.user_docs:
+        try:
+            from src.adversarial.upload_validate import validate_and_index_documents
+        except ImportError as exc:
+            raise RuntimeError(
+                "User-upload validation is not available in the current environment. "
+                "The base generation and Task 3 adversarial pipeline still work, but the "
+                "`--user-doc` path requires `src.adversarial.upload_validate`."
+            ) from exc
+
+        validation_report = validate_and_index_documents(
+            input_paths=args.user_docs,
+            domain=args.domain,
+            purpose=args.user_doc_purpose,
+        )
+        accepted_documents = validation_report.get("accepted_documents", [])
+        upload_ids = [str(record.get("upload_id")) for record in accepted_documents if record.get("upload_id")]
+        if not upload_ids:
+            raise ValueError("All uploaded documents were rejected by the defense pipeline; nothing was indexed.")
+
     records = generate_responses(
         questions=questions,
         personas=personas,
@@ -256,7 +311,16 @@ def main() -> None:
         model=args.model,
         local_endpoint=args.local_endpoint,
         dry_run=args.dry_run,
+        upload_purpose=args.user_doc_purpose,
+        upload_ids=upload_ids,
     )
+    if validation_report is not None:
+        for record in records:
+            record["upload_validation"] = {
+                "accepted_upload_ids": upload_ids,
+                "summary": validation_report.get("summary", {}),
+                "report_path": str(validation_report.get("report_path")),
+            }
     write_json(args.output, records)
 
     if args.dry_run:
@@ -265,6 +329,9 @@ def main() -> None:
             print("\n---\n")
     else:
         print(f"Generated {len(records)} synthetic responses.")
+    if validation_report is not None:
+        print(f"Validated {len(args.user_docs)} uploaded document(s).")
+        print(f"Defense report: {validation_report['report_path']}")
     print(f"Wrote generation records to {args.output}")
 
 
