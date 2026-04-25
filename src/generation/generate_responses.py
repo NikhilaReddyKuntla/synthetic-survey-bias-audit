@@ -87,19 +87,19 @@ def generate_with_groq(prompt: str, model: str = DEFAULT_GROQ_MODEL) -> str:
 
 
 def generate_with_openai(prompt: str, model: str = DEFAULT_OPENAI_MODEL) -> str:
-    try:
-        from openai import OpenAI
-    except ImportError as exc:
-        raise RuntimeError("OpenAI generation requires `openai`. Install with `pip install -r requirements.txt`.") from exc
-
-    client = OpenAI()
-    response = client.responses.create(
-        model=model,
-        input=prompt,
-        temperature=0.7,
-        max_output_tokens=500,
+    import os
+    from openai import OpenAI
+    client = OpenAI(
+        api_key=os.environ.get("OPENAI_API_KEY"),
+        base_url=os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
     )
-    return getattr(response, "output_text", "").strip()
+    response = client.chat.completions.create(
+        model=model,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.7,
+        max_tokens=500,
+    )
+    return response.choices[0].message.content.strip()
 
 
 def generate_with_local(
