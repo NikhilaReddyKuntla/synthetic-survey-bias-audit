@@ -33,6 +33,26 @@ def synthetic_responses_path() -> Path:
     return outputs_dir() / "synthetic_responses.json"
 
 
+def user_docs_dir() -> Path:
+    return data_dir() / "user_docs"
+
+
+def user_uploads_dir() -> Path:
+    return user_docs_dir() / "uploads"
+
+
+def user_validated_chunks_path() -> Path:
+    return user_docs_dir() / "validated_chunks.jsonl"
+
+
+def validation_report_path() -> Path:
+    return outputs_dir() / "adversarial_validation_report.json"
+
+
+def user_vector_store_dir() -> Path:
+    return vector_store_dir() / "user_uploads"
+
+
 def ensure_parent_dir(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 

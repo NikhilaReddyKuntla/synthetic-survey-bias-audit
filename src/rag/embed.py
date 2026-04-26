@@ -3,37 +3,33 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import faiss
 import numpy as np
+from sentence_transformers import SentenceTransformer
 
 from src.utils.helpers import ensure_dir, rag_docs_path, read_jsonl, vector_store_dir
 
 DEFAULT_MODEL = "all-MiniLM-L6-v2"
-
-if TYPE_CHECKING:
-    from sentence_transformers import SentenceTransformer
+_EMBEDDING_MODEL_CACHE: dict[str, SentenceTransformer] = {}
 
 
-def load_embedding_model(model_name: str) -> "SentenceTransformer":
+def load_embedding_model(model_name: str) -> SentenceTransformer:
+    if model_name in _EMBEDDING_MODEL_CACHE:
+        return _EMBEDDING_MODEL_CACHE[model_name]
+
     try:
-        from sentence_transformers import SentenceTransformer
-    except ImportError as exc:
-        raise RuntimeError(
-            "Sentence-Transformers is required for embeddings. "
-            "Install dependencies with `pip install -r requirements.txt`."
-        ) from exc
-    try:
-        return SentenceTransformer(model_name)
+        model = SentenceTransformer(model_name)
     except Exception as exc:
         try:
-            return SentenceTransformer(model_name, local_files_only=True)
+            model = SentenceTransformer(model_name, local_files_only=True)
         except Exception:
             raise RuntimeError(
                 f"Unable to load embedding model '{model_name}'. "
                 "If this is the first run, make sure the environment can download the model once."
             ) from exc
+    _EMBEDDING_MODEL_CACHE[model_name] = model
+    return model
 
 
 def embed_chunks(

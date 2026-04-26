@@ -105,15 +105,64 @@ def build_poison_chunks(
     return poisoned_chunks
 
 
+def attack_docs_to_poison_chunks(
+    attack_docs: Iterable[dict],
+    existing_chunk_ids: set[str] | None = None,
+) -> list[dict]:
+    used_ids = set(existing_chunk_ids or set())
+    poisoned_chunks: list[dict] = []
+
+    for index, attack_doc in enumerate(attack_docs, start=1):
+        if not isinstance(attack_doc, dict):
+            continue
+
+        domain = str(attack_doc.get("domain") or "general").strip() or "general"
+        attack_type = str(attack_doc.get("attack_type") or "custom_attack").strip() or "custom_attack"
+        target_claim = str(attack_doc.get("target_claim") or "").strip()
+        poisoned_text = str(attack_doc.get("poisoned_text") or attack_doc.get("text") or "").strip()
+        if not poisoned_text:
+            continue
+
+        base_chunk_id = (
+            str(attack_doc.get("chunk_id")).strip()
+            if attack_doc.get("chunk_id")
+            else f"{domain}_poison_{attack_type}_{index:03d}"
+        )
+        source_file = (
+            str(attack_doc.get("source_file")).strip()
+            if attack_doc.get("source_file")
+            else f"{domain}_{attack_type}_{index:03d}.txt"
+        )
+        chunk_id = _unique_chunk_id(base_chunk_id, used_ids)
+
+        poisoned_chunks.append(
+            {
+                "chunk_id": chunk_id,
+                "chunk_type": "text",
+                "domain": domain,
+                "source_file": source_file,
+                "doc_type": "user_attack_doc",
+                "year": int(attack_doc.get("year") or 2026),
+                "attack_type": attack_type,
+                "target_claim": target_claim,
+                "text": poisoned_text,
+            }
+        )
+
+    return poisoned_chunks
+
+
 def create_poisoned_vector_store(
     clean_index_path: Path,
     clean_metadata_path: Path,
     output_dir: Path,
     model_name: str = DEFAULT_MODEL,
+    embedding_model=None,
     use_hash_embeddings: bool = False,
     domains: list[str] | None = None,
     target_product: str = "Product X",
     competitor_product: str = "Product Y",
+    injected_chunks: list[dict] | None = None,
 ) -> dict:
     if not clean_index_path.exists():
         raise FileNotFoundError(f"Clean FAISS index does not exist: {clean_index_path}")
@@ -125,14 +174,20 @@ def create_poisoned_vector_store(
     if not isinstance(clean_metadata, list):
         raise ValueError(f"Expected metadata JSON array at {clean_metadata_path}")
 
-    source_domains = domains or infer_domains_from_metadata(clean_metadata)
     existing_chunk_ids = {str(chunk.get("chunk_id")) for chunk in clean_metadata if chunk.get("chunk_id")}
-    poisoned_chunks = build_poison_chunks(
-        domains=source_domains,
-        existing_chunk_ids=existing_chunk_ids,
-        target_product=target_product,
-        competitor_product=competitor_product,
-    )
+    source_domains = domains or infer_domains_from_metadata(clean_metadata)
+    if injected_chunks is None:
+        poisoned_chunks = build_poison_chunks(
+            domains=source_domains,
+            existing_chunk_ids=existing_chunk_ids,
+            target_product=target_product,
+            competitor_product=competitor_product,
+        )
+    else:
+        poisoned_chunks = attack_docs_to_poison_chunks(
+            attack_docs=injected_chunks,
+            existing_chunk_ids=existing_chunk_ids,
+        )
 
     poisoned_index = faiss.read_index(str(clean_index_path))
     if poisoned_chunks:
@@ -140,7 +195,7 @@ def create_poisoned_vector_store(
         if use_hash_embeddings:
             embedding_matrix = hash_embed_texts(texts=texts, dimension=poisoned_index.d)
         else:
-            model = load_embedding_model(model_name)
+            model = embedding_model or load_embedding_model(model_name)
             embeddings = model.encode(texts, normalize_embeddings=True, show_progress_bar=False)
             embedding_matrix = np.asarray(embeddings, dtype="float32")
         if poisoned_index.d != embedding_matrix.shape[1]:

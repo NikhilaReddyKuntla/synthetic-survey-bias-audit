@@ -77,56 +77,25 @@ Used to compare improvements from the proposed framework.
 
 ---
 
+## LLM Provider Selection
 
-
-
-
-
-## Adversarial Attack + Defense (Part 2)
-
-This repository now includes a lightweight PoisonedRAG simulation and a retrieval-consistency defense layer.
-
-### 1) Run Attack Simulation
+Text generation defaults to Groq, but you can select Groq or DeepSeek from the command line:
 
 ```bash
-python -m src.attacks.run_attack \
-  --questions-file data/questions/questions.txt \
-  --personas data/personas/personas.json \
-  --domain ecommerce \
-  --top-k 3 \
-  --provider local \
-  --model llama3.1
+python3 -m src.generation.generate_responses --provider groq --question "How do customers feel about pricing?"
+python3 -m src.generation.generate_responses --provider deepseek --question "How do customers feel about pricing?"
 ```
 
-You can add `--dry-run` to validate pipeline wiring without calling an LLM.
-For fully offline smoke tests, add `--fast-poison-vectors` to avoid sentence-transformer downloads for injected docs.
-
-Attack outputs:
-- `results/attack_responses.json`
-- `results/attack_responses.csv`
-- `results/attack_analysis.csv`
-- `results/poisoned_vector_store/rag_index.faiss`
-- `results/poisoned_vector_store/rag_metadata.json`
-
-`attack_success = true` when semantic shift is greater than 10% by default.
-
-### 2) Run Defense
+For the adversarial experiment:
 
 ```bash
-python -m src.defense.defense \
-  --attack-records results/attack_responses.json \
-  --provider local \
-  --model llama3.1
+python3 -m src.adversarial.run_attack_experiment --provider deepseek --question "How do customers feel about pricing?"
 ```
 
-You can add `--dry-run` to run retrieval/filter checks without model calls.
+DeepSeek uses the OpenAI-compatible client and expects `DEEPSEEK_API_KEY` in your environment. You can override the default `deepseek-chat` model with `--model`.
 
-Defense outputs:
-- `results/defense_results.json`
-- `results/defense_results.csv`
+---
 
-Defense behavior:
-- Re-run with retrieved (potentially poisoned) context.
-- Re-run with context filtered against trusted clean chunk IDs.
-- Flag record as suspicious when untrusted chunks appear or divergence exceeds threshold.
-- Use filtered response as defended output for suspicious records.
+
+
+

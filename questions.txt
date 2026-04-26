@@ -1,0 +1,4 @@
+How likely is this customer to choose Product X over competing alternatives, and what factors matter most?
+How trustworthy does Product X seem compared with other options in this market?
+What would make this customer recommend or avoid Product X?
+Which concerns would most influence this customer's final decision about Product X?
