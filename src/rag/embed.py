@@ -3,17 +3,29 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import faiss
 import numpy as np
-from sentence_transformers import SentenceTransformer
 
 from src.utils.helpers import ensure_dir, rag_docs_path, read_jsonl, vector_store_dir
 
 DEFAULT_MODEL = "all-MiniLM-L6-v2"
 
+if TYPE_CHECKING:
+    from sentence_transformers import SentenceTransformer
 
-def load_embedding_model(model_name: str) -> SentenceTransformer:
+
+def load_embedding_model(model_name: str) -> "SentenceTransformer":
+    try:
+        from sentence_transformers import SentenceTransformer
+    except ImportError as exc:
+        raise RuntimeError(
+            "Sentence-Transformers is required for embeddings. "
+            "Install dependencies with `pip install -r requirements.txt`."
+        ) from exc
+
+
     try:
         return SentenceTransformer(model_name)
     except Exception as exc:

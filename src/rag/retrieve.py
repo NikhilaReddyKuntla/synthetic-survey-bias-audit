@@ -6,7 +6,6 @@ from pathlib import Path
 
 import faiss
 import numpy as np
-from sentence_transformers import SentenceTransformer
 
 from src.rag.embed import DEFAULT_MODEL, load_embedding_model
 from src.utils.helpers import vector_store_dir
