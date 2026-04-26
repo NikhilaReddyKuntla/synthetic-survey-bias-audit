@@ -10,7 +10,7 @@ import faiss
 import numpy as np
 
 from src.rag.embed import DEFAULT_MODEL, load_embedding_model
-from src.utils.helpers import ensure_dir, ensure_parent_dir
+from src.utils.helpers import ensure_dir, ensure_parent_dir, vector_store_dir
 
 TOKEN_PATTERN = re.compile(r"[A-Za-z0-9']+")
 
@@ -163,11 +163,31 @@ def create_poisoned_vector_store(
     target_product: str = "Product X",
     competitor_product: str = "Product Y",
     injected_chunks: list[dict] | None = None,
+    unsafe_allow_main_store_write: bool = False,
 ) -> dict:
     if not clean_index_path.exists():
         raise FileNotFoundError(f"Clean FAISS index does not exist: {clean_index_path}")
     if not clean_metadata_path.exists():
         raise FileNotFoundError(f"Clean metadata file does not exist: {clean_metadata_path}")
+
+    target_index_path = (output_dir / "rag_index.faiss").resolve()
+    target_metadata_path = (output_dir / "rag_metadata.json").resolve()
+    clean_main_index = (vector_store_dir() / "rag_index.faiss").resolve()
+    clean_main_metadata = (vector_store_dir() / "rag_metadata.json").resolve()
+    clean_index_resolved = clean_index_path.resolve()
+    clean_metadata_resolved = clean_metadata_path.resolve()
+
+    if not unsafe_allow_main_store_write:
+        if (
+            target_index_path == clean_main_index
+            or target_metadata_path == clean_main_metadata
+            or target_index_path == clean_index_resolved
+            or target_metadata_path == clean_metadata_resolved
+        ):
+            raise ValueError(
+                "Refusing to write poisoned vectors to clean vector-store files. "
+                "Provide --unsafe-allow-main-store-write only for explicit manual overrides."
+            )
 
     with clean_metadata_path.open("r", encoding="utf-8") as handle:
         clean_metadata = json.load(handle)

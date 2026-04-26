@@ -3,14 +3,23 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from src.adversarial.defense_decision import (
+    DEFENSE_VERSION,
+    DEFAULT_JUDGE_MIN_CONFIDENCE,
+    DEFAULT_JUDGE_TIMEOUT,
+    DEFAULT_LOCAL_ENDPOINT,
+    GENERATION_PROVIDERS,
+)
+from src.adversarial.validate_docs import filter_attack_docs_by_trust, validate_attack_documents
 from src.attacks.poison_utils import (
+    build_poison_chunks,
     create_poisoned_vector_store,
     evaluate_response_shift,
+    infer_domains_from_metadata,
     retrieve_chunks_lexical,
     write_rows_to_csv,
 )
 from src.generation.generate_responses import (
-    DEFAULT_LOCAL_ENDPOINT,
     call_generation_model,
     load_persona,
     load_personas,
@@ -31,6 +40,38 @@ def default_results_dir() -> Path:
 
 def _model_label(provider: str, model: str | None) -> str | None:
     return model if model else f"default:{provider}"
+
+
+def _candidate_attack_documents(
+    *,
+    clean_metadata: list[dict],
+    domain: str | None,
+    target_product: str,
+    competitor_product: str,
+) -> list[dict]:
+    source_domains = [domain] if domain else infer_domains_from_metadata(clean_metadata)
+    existing_chunk_ids = {str(chunk.get("chunk_id")) for chunk in clean_metadata if chunk.get("chunk_id")}
+    candidate_chunks = build_poison_chunks(
+        domains=source_domains,
+        existing_chunk_ids=existing_chunk_ids,
+        target_product=target_product,
+        competitor_product=competitor_product,
+    )
+
+    attack_docs: list[dict] = []
+    for chunk in candidate_chunks:
+        attack_docs.append(
+            {
+                "domain": chunk.get("domain"),
+                "attack_type": chunk.get("attack_type"),
+                "target_claim": chunk.get("target_claim"),
+                "poisoned_text": chunk.get("text"),
+                "source_file": chunk.get("source_file"),
+                "chunk_id": chunk.get("chunk_id"),
+                "year": chunk.get("year"),
+            }
+        )
+    return attack_docs
 
 
 def generate_response_with_store(
@@ -112,9 +153,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--persona-file", type=Path, help="Optional JSONL persona file. Uses first record.")
     parser.add_argument("--personas", type=Path, default=personas_path(), help="Personas JSON file.")
     parser.add_argument("--limit-personas", type=int, help="Only generate for first N personas.")
-    parser.add_argument("--provider", default="groq", choices=("groq", "local", "openai"), help="Generation provider.")
+    parser.add_argument("--provider", default="groq", choices=GENERATION_PROVIDERS, help="Generation provider.")
     parser.add_argument("--model", default=None, help="Model name for selected provider.")
     parser.add_argument("--local-endpoint", default=DEFAULT_LOCAL_ENDPOINT, help="Local Ollama-compatible endpoint.")
+    parser.add_argument("--judge-model", default=None, help="Optional dedicated model for defense adjudication.")
+    parser.add_argument("--judge-timeout", type=int, default=DEFAULT_JUDGE_TIMEOUT, help="Judge timeout in seconds.")
+    parser.add_argument(
+        "--judge-min-confidence",
+        type=float,
+        default=DEFAULT_JUDGE_MIN_CONFIDENCE,
+        help="Minimum judge confidence required before attack chunks can be indexed.",
+    )
     parser.add_argument(
         "--clean-index-path",
         type=Path,
@@ -142,6 +191,17 @@ def parse_args() -> argparse.Namespace:
         help="Use hash-based vectors for injected docs instead of sentence-transformer embeddings.",
     )
     parser.add_argument("--semantic-threshold", type=float, default=10.0, help="Shift threshold for attack success.")
+    parser.add_argument(
+        "--validation-report-output",
+        type=Path,
+        default=results_dir / "attack_validation_report.json",
+        help="Validation report output for defense-gated attack chunks.",
+    )
+    parser.add_argument(
+        "--unsafe-allow-main-store-write",
+        action="store_true",
+        help="Allow poisoned outputs to target clean main store paths (unsafe, disabled by default).",
+    )
     parser.add_argument("--output-json", type=Path, default=results_dir / "attack_responses.json", help="JSON output path.")
     parser.add_argument("--output-csv", type=Path, default=results_dir / "attack_responses.csv", help="CSV output path.")
     parser.add_argument("--analysis-csv", type=Path, default=results_dir / "attack_analysis.csv", help="Metrics CSV path.")
@@ -158,6 +218,31 @@ def main() -> None:
 
     questions = load_questions(question=args.question, questions_file=args.questions_file)
     personas = resolve_personas(args)
+    clean_metadata = read_json(args.clean_metadata_path)
+    if not isinstance(clean_metadata, list):
+        raise ValueError(f"Expected metadata JSON array at {args.clean_metadata_path}")
+
+    candidate_attack_docs = _candidate_attack_documents(
+        clean_metadata=clean_metadata,
+        domain=args.domain,
+        target_product=args.target_product,
+        competitor_product=args.competitor_product,
+    )
+    validation_report = validate_attack_documents(
+        attack_docs=candidate_attack_docs,
+        trusted_chunks=clean_metadata,
+        provider=args.provider,
+        model=args.model,
+        judge_model=args.judge_model,
+        local_endpoint=args.local_endpoint,
+        judge_timeout=args.judge_timeout,
+        judge_min_confidence=args.judge_min_confidence,
+    )
+    write_json(args.validation_report_output, validation_report)
+    defended_attack_docs = filter_attack_docs_by_trust(
+        report=validation_report,
+        minimum_trust="high",
+    )
 
     poison_info = create_poisoned_vector_store(
         clean_index_path=args.clean_index_path,
@@ -166,8 +251,8 @@ def main() -> None:
         model_name=args.embedding_model,
         use_hash_embeddings=args.fast_poison_vectors,
         domains=[args.domain] if args.domain else None,
-        target_product=args.target_product,
-        competitor_product=args.competitor_product,
+        injected_chunks=defended_attack_docs,
+        unsafe_allow_main_store_write=args.unsafe_allow_main_store_write,
     )
 
     embedding_model = None if args.dry_run else load_embedding_model(args.embedding_model)
@@ -236,6 +321,9 @@ def main() -> None:
                 "baseline_retrieved_sources": baseline["retrieved_sources"],
                 "attacked_retrieved_sources": attacked["retrieved_sources"],
                 "injected_attack_types": attack_types,
+                "defense_passed_chunk_count": len(defended_attack_docs),
+                "candidate_attack_doc_count": len(candidate_attack_docs),
+                "defense_version": DEFENSE_VERSION,
                 **metrics,
             }
             records.append(record)
@@ -252,6 +340,7 @@ def main() -> None:
                     "keyword_shift_pct": metrics["keyword_shift_pct"],
                     "attack_success": metrics["attack_success"],
                     "threshold_pct": metrics["threshold_pct"],
+                    "defense_passed_chunk_count": len(defended_attack_docs),
                 }
             )
 
@@ -275,6 +364,9 @@ def main() -> None:
             "keyword_shift_pct",
             "attack_success",
             "injected_attack_types",
+            "defense_passed_chunk_count",
+            "candidate_attack_doc_count",
+            "defense_version",
             "baseline_retrieved_sources",
             "attacked_retrieved_sources",
             "persona",
@@ -295,10 +387,12 @@ def main() -> None:
             "keyword_shift_pct",
             "attack_success",
             "threshold_pct",
+            "defense_passed_chunk_count",
         ],
     )
 
     print(f"Poisoned store written to {poison_info['poisoned_index_path'].parent}")
+    print(f"Wrote defense validation report to {args.validation_report_output}")
     print(f"Wrote {len(records)} attack comparison records to {args.output_json}")
     print(f"Wrote attack response table to {args.output_csv}")
     print(f"Wrote attack analysis table to {args.analysis_csv}")

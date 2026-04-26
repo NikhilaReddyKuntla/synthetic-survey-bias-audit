@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import re
 import shutil
 from collections import Counter
 from datetime import datetime, timezone
@@ -12,8 +11,15 @@ from pathlib import Path
 import faiss
 import numpy as np
 
-from src.adversarial.validate_docs import _jaccard_similarity, _group_trusted_chunks_by_domain
-from src.attacks.poison_utils import tokenize
+from src.adversarial.defense_decision import (
+    DEFAULT_JUDGE_MAX_TOKENS,
+    DEFAULT_JUDGE_MIN_CONFIDENCE,
+    DEFAULT_JUDGE_TIMEOUT,
+    DEFAULT_LOCAL_ENDPOINT,
+    GENERATION_PROVIDERS,
+    evaluate_defense_candidate,
+    group_trusted_chunks_by_domain,
+)
 from src.rag.embed import DEFAULT_MODEL, load_embedding_model
 from src.rag.ingest import ALLOWED_DOMAINS, infer_doc_type, slugify
 from src.utils.doc_utils import extract_clean_document_text, supported_document
@@ -29,20 +35,6 @@ from src.utils.helpers import (
     write_json,
 )
 from src.utils.text_utils import chunk_text, extract_year
-
-PROMPT_INJECTION_PATTERNS = (
-    re.compile(r"\bignore (all )?(previous|prior|above) instructions\b", re.IGNORECASE),
-    re.compile(r"\bdisregard (all )?(previous|prior|above) instructions\b", re.IGNORECASE),
-    re.compile(r"\breveal (the )?(system|developer) (prompt|message|instructions)\b", re.IGNORECASE),
-    re.compile(r"\b(system|developer) prompt\b", re.IGNORECASE),
-    re.compile(r"\bapi[_ -]?key\b", re.IGNORECASE),
-    re.compile(r"\bdo not follow\b.*\buser\b", re.IGNORECASE),
-    re.compile(r"\boverride\b.*\b(instructions|policy|rules)\b", re.IGNORECASE),
-)
-STAT_PATTERN = re.compile(r"\b\d{2,}%\b|\b\d{3,}\s+respondents?\b", re.IGNORECASE)
-ABSOLUTE_PATTERN = re.compile(r"\b(all|always|never|every|guaranteed|undeniable)\b", re.IGNORECASE)
-LOW_ALIGNMENT_THRESHOLD = 0.045
-LOW_SUPPORT_THRESHOLD = 0.08
 
 
 def _upload_id(path: Path, purpose: str | None) -> str:
@@ -60,57 +52,55 @@ def _copy_upload(path: Path, upload_id: str) -> Path:
     return destination
 
 
-def _trusted_token_sets(trusted_chunks: list[dict], domain: str | None = None) -> list[set[str]]:
-    grouped = _group_trusted_chunks_by_domain(trusted_chunks)
-    if domain:
-        records = grouped.get(domain, [])
-    else:
-        records = [chunk for chunks in grouped.values() for chunk in chunks]
-    if not records:
-        records = [chunk for chunks in grouped.values() for chunk in chunks]
-    return [tokenize(str(chunk.get("text") or "")) for chunk in records if isinstance(chunk, dict)]
-
-
-def _max_support(text: str, trusted_token_sets: list[set[str]]) -> float:
-    tokens = tokenize(text)
-    return max((_jaccard_similarity(tokens, trusted_tokens) for trusted_tokens in trusted_token_sets), default=0.0)
-
-
-def validate_uploaded_text(text: str, trusted_chunks: list[dict], domain: str | None = None) -> dict:
-    trusted_token_sets = _trusted_token_sets(trusted_chunks=trusted_chunks, domain=domain)
-    support_score = _max_support(text, trusted_token_sets)
-    has_prompt_injection = any(pattern.search(text) for pattern in PROMPT_INJECTION_PATTERNS)
-    has_unverified_stats = bool(STAT_PATTERN.search(text)) and support_score < LOW_SUPPORT_THRESHOLD
-    has_absolute_language = bool(ABSOLUTE_PATTERN.search(text)) and support_score < LOW_SUPPORT_THRESHOLD
-    low_alignment = support_score < LOW_ALIGNMENT_THRESHOLD
-
-    reasons: list[str] = []
-    if has_prompt_injection:
-        reasons.append("prompt_injection_or_instruction_override")
-    if has_unverified_stats:
-        reasons.append("unsupported_statistical_claim")
-    if has_absolute_language:
-        reasons.append("unsupported_absolute_language")
-    if low_alignment:
-        reasons.append("low_alignment_with_trusted_chunks")
-
-    if has_prompt_injection or has_unverified_stats or has_absolute_language:
-        trust_score = "low"
-    elif low_alignment:
-        trust_score = "medium"
-    else:
-        trust_score = "high"
+def validate_uploaded_text(
+    text: str,
+    trusted_chunks: list[dict],
+    domain: str | None = None,
+    provider: str = "groq",
+    model: str | None = None,
+    judge_model: str | None = None,
+    local_endpoint: str = DEFAULT_LOCAL_ENDPOINT,
+    judge_timeout: int = DEFAULT_JUDGE_TIMEOUT,
+    judge_min_confidence: float = DEFAULT_JUDGE_MIN_CONFIDENCE,
+    judge_max_tokens: int = DEFAULT_JUDGE_MAX_TOKENS,
+) -> dict:
+    grouped = group_trusted_chunks_by_domain(trusted_chunks)
+    decision = evaluate_defense_candidate(
+        text=text,
+        trusted_chunks_by_domain=grouped,
+        domain=domain,
+        target_claim=None,
+        provider=provider,
+        model=model,
+        judge_model=judge_model,
+        local_endpoint=local_endpoint,
+        judge_timeout=judge_timeout,
+        judge_min_confidence=judge_min_confidence,
+        judge_max_tokens=judge_max_tokens,
+        run_judge=True,
+        fail_closed=True,
+        check_prompt_injection=True,
+    )
 
     return {
-        "trust_score": trust_score,
-        "accepted": trust_score != "low",
-        "support_score": support_score,
-        "has_prompt_injection": has_prompt_injection,
-        "has_unverified_stats": has_unverified_stats,
-        "has_absolute_language": has_absolute_language,
-        "low_alignment": low_alignment,
-        "reasons": reasons,
-        "recommended_action": "index_for_retrieval" if trust_score != "low" else "reject_upload",
+        "trust_score": decision["final_trust_score"],  # compatibility alias
+        "final_trust_score": decision["final_trust_score"],
+        "defense_passed": decision["defense_passed"],
+        "accepted": decision["defense_passed"],
+        "static_score": decision["static_score"],
+        "support_score": decision["support_score"],
+        "judge_verdict": decision["judge_verdict"],
+        "judge_confidence": decision["judge_confidence"],
+        "judge_reason": decision["judge_reason"],
+        "judge_failed": decision["judge_failed"],
+        "judge_error": decision["judge_error"],
+        "has_prompt_injection": decision["has_prompt_injection"],
+        "has_unverified_stats": decision["has_unverified_stats"],
+        "has_absolute_language": decision["has_absolute_language"],
+        "low_alignment": decision["low_alignment"],
+        "reasons": decision["reasons"],
+        "recommended_action": "index_for_retrieval" if decision["defense_passed"] else "reject_upload",
+        "defense_version": decision["defense_version"],
     }
 
 
@@ -143,7 +133,13 @@ def build_user_upload_chunks(
                 "year": year,
                 "upload_id": upload_id,
                 "upload_purpose": purpose,
-                "trust_score": validation["trust_score"],
+                "trust_score": validation["final_trust_score"],
+                "final_trust_score": validation["final_trust_score"],
+                "defense_passed": validation["defense_passed"],
+                "defense_version": validation["defense_version"],
+                "static_score": validation["static_score"],
+                "judge_verdict": validation["judge_verdict"],
+                "judge_confidence": validation["judge_confidence"],
                 "validation_reasons": validation["reasons"],
                 "text": chunk,
             }
@@ -151,7 +147,11 @@ def build_user_upload_chunks(
     return records
 
 
-def _append_chunks_to_user_vector_store(chunks: list[dict], model_name: str = DEFAULT_MODEL) -> dict:
+def _append_chunks_to_user_vector_store(
+    chunks: list[dict],
+    model_name: str = DEFAULT_MODEL,
+    unsafe_allow_main_store_write: bool = False,
+) -> dict:
     if not chunks:
         raise ValueError("Cannot index an empty chunk list.")
 
@@ -159,6 +159,16 @@ def _append_chunks_to_user_vector_store(chunks: list[dict], model_name: str = DE
     ensure_dir(store_dir)
     index_path = store_dir / "rag_index.faiss"
     metadata_path = store_dir / "rag_metadata.json"
+
+    clean_index = (vector_store_dir() / "rag_index.faiss").resolve()
+    clean_metadata = (vector_store_dir() / "rag_metadata.json").resolve()
+    if not unsafe_allow_main_store_write and (
+        index_path.resolve() == clean_index or metadata_path.resolve() == clean_metadata
+    ):
+        raise ValueError(
+            "Refusing to write uploaded chunks into clean main vector store files. "
+            "Use --unsafe-allow-main-store-write only for explicit manual overrides."
+        )
 
     existing_metadata: list[dict] = []
     index: faiss.Index | None = None
@@ -199,10 +209,18 @@ def validate_and_index_documents(
     domain: str | None = None,
     purpose: str | None = None,
     trusted_metadata_path: Path | None = None,
+    provider: str = "groq",
+    model: str | None = None,
+    judge_model: str | None = None,
+    local_endpoint: str = DEFAULT_LOCAL_ENDPOINT,
+    judge_timeout: int = DEFAULT_JUDGE_TIMEOUT,
+    judge_min_confidence: float = DEFAULT_JUDGE_MIN_CONFIDENCE,
+    judge_max_tokens: int = DEFAULT_JUDGE_MAX_TOKENS,
     model_name: str = DEFAULT_MODEL,
     chunk_size: int = 700,
     chunk_overlap: int = 120,
     report_output: Path | None = None,
+    unsafe_allow_main_store_write: bool = False,
 ) -> dict:
     trusted_metadata_path = trusted_metadata_path or (vector_store_dir() / "rag_metadata.json")
     trusted_chunks = read_json(trusted_metadata_path) if trusted_metadata_path.exists() else []
@@ -226,7 +244,18 @@ def validate_and_index_documents(
 
         upload_id = _upload_id(path, purpose=purpose)
         stored_path = _copy_upload(path, upload_id=upload_id)
-        validation = validate_uploaded_text(text=text, trusted_chunks=trusted_chunks, domain=domain)
+        validation = validate_uploaded_text(
+            text=text,
+            trusted_chunks=trusted_chunks,
+            domain=domain,
+            provider=provider,
+            model=model,
+            judge_model=judge_model,
+            local_endpoint=local_endpoint,
+            judge_timeout=judge_timeout,
+            judge_min_confidence=judge_min_confidence,
+            judge_max_tokens=judge_max_tokens,
+        )
 
         document_record = {
             "upload_id": upload_id,
@@ -255,9 +284,15 @@ def validate_and_index_documents(
 
     index_result = None
     if accepted_chunks:
-        index_result = _append_chunks_to_user_vector_store(chunks=accepted_chunks, model_name=model_name)
+        index_result = _append_chunks_to_user_vector_store(
+            chunks=accepted_chunks,
+            model_name=model_name,
+            unsafe_allow_main_store_write=unsafe_allow_main_store_write,
+        )
 
-    trust_counter = Counter(record["validation"]["trust_score"] for record in accepted_documents + rejected_documents)
+    trust_counter = Counter(
+        record["validation"]["final_trust_score"] for record in accepted_documents + rejected_documents
+    )
     report = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "summary": {
@@ -270,6 +305,7 @@ def validate_and_index_documents(
                 "medium": trust_counter.get("medium", 0),
                 "low": trust_counter.get("low", 0),
             },
+            "accepted_trust_policy": "high_only",
         },
         "accepted_documents": accepted_documents,
         "rejected_documents": rejected_documents,
@@ -299,9 +335,31 @@ def parse_args() -> argparse.Namespace:
         default=vector_store_dir() / "rag_metadata.json",
         help="Trusted clean metadata used by the defense checks.",
     )
+    parser.add_argument("--provider", default="groq", choices=GENERATION_PROVIDERS, help="Judge provider.")
+    parser.add_argument("--model", default=None, help="Judge provider model unless --judge-model is set.")
+    parser.add_argument("--judge-model", default=None, help="Optional dedicated judge model.")
+    parser.add_argument("--local-endpoint", default=DEFAULT_LOCAL_ENDPOINT, help="Local provider endpoint.")
+    parser.add_argument("--judge-timeout", type=int, default=DEFAULT_JUDGE_TIMEOUT, help="Judge timeout in seconds.")
+    parser.add_argument(
+        "--judge-min-confidence",
+        type=float,
+        default=DEFAULT_JUDGE_MIN_CONFIDENCE,
+        help="Minimum judge confidence required for indexing.",
+    )
+    parser.add_argument(
+        "--judge-max-tokens",
+        type=int,
+        default=DEFAULT_JUDGE_MAX_TOKENS,
+        help="Maximum completion tokens for judge response.",
+    )
     parser.add_argument("--embedding-model", default=DEFAULT_MODEL, help="Embedding model for accepted upload chunks.")
     parser.add_argument("--chunk-size", type=int, default=700)
     parser.add_argument("--chunk-overlap", type=int, default=120)
+    parser.add_argument(
+        "--unsafe-allow-main-store-write",
+        action="store_true",
+        help="Allow writing accepted upload chunks into clean main store files (unsafe, disabled by default).",
+    )
     parser.add_argument(
         "--output",
         type=Path,
@@ -318,10 +376,18 @@ def main() -> None:
         domain=args.domain,
         purpose=args.purpose,
         trusted_metadata_path=args.trusted_metadata_path,
+        provider=args.provider,
+        model=args.model,
+        judge_model=args.judge_model,
+        local_endpoint=args.local_endpoint,
+        judge_timeout=args.judge_timeout,
+        judge_min_confidence=args.judge_min_confidence,
+        judge_max_tokens=args.judge_max_tokens,
         model_name=args.embedding_model,
         chunk_size=args.chunk_size,
         chunk_overlap=args.chunk_overlap,
         report_output=args.output,
+        unsafe_allow_main_store_write=args.unsafe_allow_main_store_write,
     )
     summary = report["summary"]
     print(

@@ -20,6 +20,8 @@ DEFAULT_GROQ_MODEL = "llama-3.1-8b-instant"
 DEFAULT_OPENAI_MODEL = "gpt-4.1-mini"
 DEFAULT_DEEPSEEK_MODEL = "deepseek-chat"
 DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+DEFAULT_JUDGE_TIMEOUT = 20
+DEFAULT_JUDGE_MIN_CONFIDENCE = 0.70
 GENERATION_PROVIDERS = ("groq", "deepseek", "local", "openai")
 
 
@@ -81,7 +83,11 @@ def source_refs(chunks: list[dict]) -> list[dict]:
     ]
 
 
-def generate_with_groq(prompt: str, model: str = DEFAULT_GROQ_MODEL) -> str:
+def generate_with_groq(
+    prompt: str,
+    model: str = DEFAULT_GROQ_MODEL,
+    max_output_tokens: int = 500,
+) -> str:
     try:
         from groq import Groq
     except ImportError as exc:
@@ -92,12 +98,16 @@ def generate_with_groq(prompt: str, model: str = DEFAULT_GROQ_MODEL) -> str:
         model=model,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.7,
-        max_completion_tokens=500,
+        max_completion_tokens=max_output_tokens,
     )
     return (completion.choices[0].message.content or "").strip()
 
 
-def generate_with_openai(prompt: str, model: str = DEFAULT_OPENAI_MODEL) -> str:
+def generate_with_openai(
+    prompt: str,
+    model: str = DEFAULT_OPENAI_MODEL,
+    max_output_tokens: int = 500,
+) -> str:
     try:
         from openai import OpenAI
     except ImportError as exc:
@@ -108,12 +118,16 @@ def generate_with_openai(prompt: str, model: str = DEFAULT_OPENAI_MODEL) -> str:
         model=model,
         input=prompt,
         temperature=0.7,
-        max_output_tokens=500,
+        max_output_tokens=max_output_tokens,
     )
     return getattr(response, "output_text", "").strip()
 
 
-def generate_with_deepseek(prompt: str, model: str = DEFAULT_DEEPSEEK_MODEL) -> str:
+def generate_with_deepseek(
+    prompt: str,
+    model: str = DEFAULT_DEEPSEEK_MODEL,
+    max_output_tokens: int = 500,
+) -> str:
     try:
         from openai import OpenAI
     except ImportError as exc:
@@ -131,7 +145,7 @@ def generate_with_deepseek(prompt: str, model: str = DEFAULT_DEEPSEEK_MODEL) -> 
         model=model,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.7,
-        max_tokens=500,
+        max_tokens=max_output_tokens,
     )
     return (completion.choices[0].message.content or "").strip()
 
@@ -140,12 +154,13 @@ def generate_with_local(
     prompt: str,
     model: str = DEFAULT_LOCAL_MODEL,
     endpoint: str = DEFAULT_LOCAL_ENDPOINT,
+    max_output_tokens: int = 500,
 ) -> str:
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "stream": False,
-        "options": {"temperature": 0.7},
+        "options": {"temperature": 0.7, "num_predict": max_output_tokens},
     }
     request = Request(
         endpoint,
@@ -171,15 +186,33 @@ def call_generation_model(
     provider: str = "groq",
     model: str | None = None,
     local_endpoint: str = DEFAULT_LOCAL_ENDPOINT,
+    max_output_tokens: int = 500,
 ) -> str:
     if provider == "groq":
-        return generate_with_groq(prompt, model=model or DEFAULT_GROQ_MODEL)
+        return generate_with_groq(
+            prompt,
+            model=model or DEFAULT_GROQ_MODEL,
+            max_output_tokens=max_output_tokens,
+        )
     if provider == "deepseek":
-        return generate_with_deepseek(prompt, model=model or DEFAULT_DEEPSEEK_MODEL)
+        return generate_with_deepseek(
+            prompt,
+            model=model or DEFAULT_DEEPSEEK_MODEL,
+            max_output_tokens=max_output_tokens,
+        )
     if provider == "local":
-        return generate_with_local(prompt, model=model or DEFAULT_LOCAL_MODEL, endpoint=local_endpoint)
+        return generate_with_local(
+            prompt,
+            model=model or DEFAULT_LOCAL_MODEL,
+            endpoint=local_endpoint,
+            max_output_tokens=max_output_tokens,
+        )
     if provider == "openai":
-        return generate_with_openai(prompt, model=model or DEFAULT_OPENAI_MODEL)
+        return generate_with_openai(
+            prompt,
+            model=model or DEFAULT_OPENAI_MODEL,
+            max_output_tokens=max_output_tokens,
+        )
     raise ValueError(f"Unsupported generation provider. Expected one of: {', '.join(GENERATION_PROVIDERS)}.")
 
 
@@ -310,6 +343,28 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Purpose label used to prioritize the current uploaded documents during retrieval.",
     )
+    parser.add_argument(
+        "--judge-model",
+        default=None,
+        help="Optional dedicated model for upload-defense adjudication.",
+    )
+    parser.add_argument(
+        "--judge-timeout",
+        type=int,
+        default=DEFAULT_JUDGE_TIMEOUT,
+        help="Upload-defense judge timeout in seconds.",
+    )
+    parser.add_argument(
+        "--judge-min-confidence",
+        type=float,
+        default=DEFAULT_JUDGE_MIN_CONFIDENCE,
+        help="Minimum judge confidence required for uploaded documents to be indexed.",
+    )
+    parser.add_argument(
+        "--unsafe-allow-main-store-write",
+        action="store_true",
+        help="Allow upload-defense indexing to write to clean main store paths (unsafe, disabled by default).",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Build prompt and retrieve context without calling an LLM.")
     return parser.parse_args()
 
@@ -344,6 +399,13 @@ def main() -> None:
             input_paths=args.user_docs,
             domain=args.domain,
             purpose=args.user_doc_purpose,
+            provider=args.provider,
+            model=args.model,
+            judge_model=args.judge_model,
+            local_endpoint=args.local_endpoint,
+            judge_timeout=args.judge_timeout,
+            judge_min_confidence=args.judge_min_confidence,
+            unsafe_allow_main_store_write=args.unsafe_allow_main_store_write,
         )
         accepted_documents = validation_report.get("accepted_documents", [])
         upload_ids = [str(record.get("upload_id")) for record in accepted_documents if record.get("upload_id")]
