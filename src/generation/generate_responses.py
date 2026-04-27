@@ -16,6 +16,7 @@ DEFAULT_LOCAL_ENDPOINT = "http://localhost:11434/api/chat"
 DEFAULT_LOCAL_MODEL = "llama3.1"
 DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
 DEFAULT_OPENAI_MODEL = "gpt-4.1-mini"
+GENERATION_PROVIDERS = ("groq", "local", "openai")
 ALLOWED_DOMAINS = ("ecommerce", "finance", "healthcare")
 
 
@@ -354,7 +355,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--persona-file", type=Path, help="Optional JSONL persona file. Uses the first record.")
     parser.add_argument("--personas", type=Path, default=personas_path(), help="Personas JSON file.")
     parser.add_argument("--limit-personas", type=int, help="Only generate for the first N personas.")
-    parser.add_argument("--provider", default="groq", choices=("groq", "local", "openai"), help="Generation provider.")
+    parser.add_argument("--provider", default="groq", choices=GENERATION_PROVIDERS, help="Generation provider.")
     parser.add_argument("--model", default=None, help="Generation model. Defaults depend on provider.")
     parser.add_argument("--local-endpoint", default=DEFAULT_LOCAL_ENDPOINT, help="Local Ollama-compatible chat endpoint.")
     parser.add_argument("--user-doc", type=Path, help="Optional user document (.pdf, .txt, .md) to validate and prioritize.")

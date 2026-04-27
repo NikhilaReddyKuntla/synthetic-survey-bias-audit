@@ -27,7 +27,7 @@ from src.generation.generate_responses import (
 )
 from src.rag.embed import DEFAULT_MODEL, load_embedding_model
 from src.rag.retrieve import format_retrieved_context, retrieve_chunks
-from src.utils.helpers import ensure_parent_dir, outputs_dir, personas_path, read_json, vector_store_dir, write_json
+from src.utils.helpers import attack_outputs_dir, ensure_parent_dir, personas_path, read_json, vector_store_dir, write_json
 from src.utils.prompt_templates import build_survey_response_prompt
 
 ALLOWED_DOMAINS = ("ecommerce", "finance", "healthcare")
@@ -251,6 +251,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--provider", default="groq", choices=GENERATION_PROVIDERS, help="Generation provider.")
     parser.add_argument("--model", default=None, help="Model name for selected provider.")
     parser.add_argument("--local-endpoint", default=DEFAULT_LOCAL_ENDPOINT, help="Local Ollama-compatible endpoint.")
+    parser.add_argument("--judge-timeout", type=int, default=20, help="Compatibility flag for validation commands.")
+    parser.add_argument(
+        "--judge-min-confidence",
+        type=float,
+        default=0.70,
+        help="Compatibility flag for validation commands.",
+    )
     parser.add_argument(
         "--clean-index-path",
         type=Path,
@@ -277,7 +284,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--defended-store-dir",
         type=Path,
-        default=outputs_dir() / "poisoned_vector_store_with_defense",
+        default=attack_outputs_dir() / "poisoned_vector_store_with_defense",
         help="Output directory for poisoned index/metadata with low-trust docs removed.",
     )
     parser.add_argument("--embedding-model", default=DEFAULT_MODEL, help="Embedding model for shift scoring.")
@@ -296,31 +303,31 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--clean-output",
         type=Path,
-        default=outputs_dir() / "attack_clean.json",
+        default=attack_outputs_dir() / "attack_clean.json",
         help="Output path for clean condition results.",
     )
     parser.add_argument(
         "--defended-output",
         type=Path,
-        default=outputs_dir() / "attack_poisoned_with_defense.json",
+        default=attack_outputs_dir() / "attack_poisoned_with_defense.json",
         help="Output path for poisoned with-defense results.",
     )
     parser.add_argument(
         "--validation-report-output",
         type=Path,
-        default=outputs_dir() / "adversarial_validation_report.json",
+        default=attack_outputs_dir() / "adversarial_validation_report.json",
         help="Output path for attack document validation report.",
     )
     parser.add_argument(
         "--analysis-csv",
         type=Path,
-        default=outputs_dir() / "attack_analysis.csv",
+        default=attack_outputs_dir() / "attack_analysis.csv",
         help="Detailed per-record attack analysis CSV.",
     )
     parser.add_argument(
         "--analysis-report-output",
         type=Path,
-        default=outputs_dir() / "attack_analysis_report.md",
+        default=attack_outputs_dir() / "attack_analysis_report.md",
         help="Markdown summary report path.",
     )
     parser.add_argument("--dry-run", action="store_true", help="Skip LLM calls and only validate pipeline wiring.")

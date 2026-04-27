@@ -174,8 +174,8 @@ data/user_docs/attacks/attack_chunks_preview.json
 
 ```bash
 python -m src.adversarial.validate_docs \
-  --provider groq \
-  --model llama-3.1-8b-instant \
+  --provider openai \
+  --model gpt-4.1-mini \
   --judge-timeout 20 \
   --judge-min-confidence 0.70 \
   --output data/outputs/attack/adversarial_validation_report.json
@@ -196,8 +196,8 @@ python -m src.adversarial.run_attack_experiment \
   --questions-file questions.txt \
   --personas data/personas/personas.json \
   --max-cases 40 \
-  --provider groq \
-  --model llama-3.1-8b-instant \
+  --provider openai \
+  --model gpt-4.1-mini \
   --judge-timeout 20 \
   --judge-min-confidence 0.70
 ```
@@ -219,8 +219,8 @@ python -m src.adversarial.upload_validate \
   --input data/user_docs/uploads/example.txt \
   --domain finance \
   --purpose finance_context \
-  --provider groq \
-  --model llama-3.1-8b-instant \
+  --provider openai \
+  --model gpt-4.1-mini \
   --judge-timeout 20 \
   --judge-min-confidence 0.70 \
   --output data/outputs/user_uploads/user_upload_validation_report.json
@@ -240,14 +240,10 @@ Use 10 personas for the user-document demo so it stays inexpensive but shows rep
 python -m src.generation.generate_responses \
   --questions-file questions.txt \
   --personas data/personas/personas.json \
-  --limit-personas 10 \
-  --provider groq \
-  --model llama-3.1-8b-instant \
-  --user-doc data/user_docs/uploads/example.txt \
-  --user-doc-purpose finance_context \
-  --judge-timeout 20 \
-  --judge-min-confidence 0.70 \
-  --output data/outputs/generation/synthetic_responses_with_user_doc.json
+  --limit-personas 25 \
+  --provider openai \
+  --model gpt-4.1-mini \
+  --output data/outputs/generation/synthetic_responses.json
 ```
 
 Output:
@@ -255,17 +251,3 @@ Output:
 ```text
 data/outputs/generation/synthetic_responses_with_user_doc.json
 ```
-
-## 12. Cost Controls
-
-To reduce runtime and API usage:
-
-- Lower RAG generation with `--limit-personas 10`.
-- Lower adversarial experiment with `--max-cases 20`.
-- Keep RAG validation as-is because it does not call an LLM.
-
-To strengthen final results:
-
-- Increase RAG generation to `--limit-personas 50`.
-- Increase adversarial experiment to `--max-cases 80`.
-- A full run with 100 personas and 2 questions is about 200 cases, which means about 400 generation calls for the adversarial experiment.
