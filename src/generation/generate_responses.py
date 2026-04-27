@@ -2,25 +2,21 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from sentence_transformers import SentenceTransformer
-
-from src.rag.embed import DEFAULT_MODEL, load_embedding_model
-from src.rag.retrieve import format_retrieved_context, retrieve_chunks, retrieve_chunks_with_priority
+from src.attacks.poison_utils import build_adversarial_templates, tokenize
+from src.rag.embed import DEFAULT_MODEL
+from src.rag.retrieve import format_retrieved_context, retrieve_chunks
 from src.utils.helpers import personas_path, read_json, read_jsonl, synthetic_responses_path, write_json
 from src.utils.prompt_templates import build_survey_response_prompt
 
 DEFAULT_LOCAL_ENDPOINT = "http://localhost:11434/api/chat"
 DEFAULT_LOCAL_MODEL = "llama3.1"
-DEFAULT_GROQ_MODEL = "llama-3.1-8b-instant"
+DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
 DEFAULT_OPENAI_MODEL = "gpt-4.1-mini"
-DEFAULT_DEEPSEEK_MODEL = "deepseek-chat"
-DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
-GENERATION_PROVIDERS = ("groq", "deepseek", "local", "openai")
+ALLOWED_DOMAINS = ("ecommerce", "finance", "healthcare")
 
 
 def load_persona(persona_json: str | None = None, persona_file: Path | None = None) -> dict | None:
@@ -70,10 +66,6 @@ def source_refs(chunks: list[dict]) -> list[dict]:
             "chunk_type": chunk.get("chunk_type", "text"),
             "domain": chunk.get("domain"),
             "source_file": chunk.get("source_file"),
-            "source_kind": chunk.get("source_kind"),
-            "trust_score": chunk.get("trust_score"),
-            "upload_id": chunk.get("upload_id"),
-            "upload_purpose": chunk.get("upload_purpose"),
             "year": chunk.get("year"),
             "page_number": chunk.get("page_number"),
         }
@@ -81,7 +73,105 @@ def source_refs(chunks: list[dict]) -> list[dict]:
     ]
 
 
-def generate_with_groq(prompt: str, model: str = DEFAULT_GROQ_MODEL) -> str:
+def infer_user_doc_domain(domain: str | None, purpose: str | None) -> str:
+    if domain:
+        return domain
+    purpose_text = (purpose or "").lower()
+    for candidate in ALLOWED_DOMAINS:
+        if candidate in purpose_text:
+            return candidate
+    return "finance"
+
+
+def score_chunks_lexical(query: str, chunks: list[dict]) -> list[dict]:
+    query_tokens = tokenize(query or "")
+    scored: list[tuple[int, int, dict]] = []
+    for position, chunk in enumerate(chunks):
+        text_tokens = tokenize(str(chunk.get("text") or ""))
+        scored.append((len(query_tokens & text_tokens), -position, chunk))
+    scored.sort(reverse=True, key=lambda item: (item[0], item[1]))
+    return [chunk for _, _, chunk in scored]
+
+
+def validate_user_doc_chunks_lexical(chunks: list[dict], threshold: float) -> tuple[bool, list[str]]:
+    suspicious_phrases = (
+        "ignore previous",
+        "ignore all previous",
+        "system prompt",
+        "developer message",
+        "override instructions",
+        "you must answer",
+        "do not follow",
+    )
+    reasons: list[str] = []
+    combined_text = "\n".join(str(chunk.get("text") or "") for chunk in chunks)
+    lowered_text = combined_text.lower()
+    for phrase in suspicious_phrases:
+        if phrase in lowered_text:
+            reasons.append(f"prompt_injection_phrase:{phrase}")
+
+    uploaded_tokens = tokenize(combined_text)
+    template_texts = [
+        template["text"]
+        for domain in ALLOWED_DOMAINS
+        for template in build_adversarial_templates(domain)
+    ]
+    for template in template_texts:
+        template_tokens = tokenize(template)
+        if not uploaded_tokens or not template_tokens:
+            continue
+        overlap = len(uploaded_tokens & template_tokens) / len(template_tokens)
+        if overlap >= threshold:
+            reasons.append(f"adversarial_template_overlap:{overlap:.2f}")
+            break
+
+    return bool(reasons), reasons
+
+
+def prepare_user_doc_chunks(
+    user_doc: Path,
+    domain: str,
+    purpose: str | None,
+    adversarial_threshold: float,
+    embedding_model_name: str = DEFAULT_MODEL,
+) -> tuple[list[dict], dict]:
+    from src.pipeline.document_pipeline import build_upload_chunks, parse_document
+
+    text_chunks = parse_document(user_doc)
+    if not text_chunks:
+        raise ValueError(f"User document produced no text after parsing: {user_doc}")
+
+    chunks = build_upload_chunks(text_chunks=text_chunks, doc_path=user_doc, domain=domain)
+    for chunk in chunks:
+        chunk["source_kind"] = "user_upload"
+        chunk["upload_purpose"] = purpose
+
+    is_flagged, reasons = validate_user_doc_chunks_lexical(chunks=chunks, threshold=adversarial_threshold)
+    validation = {
+        "user_doc": str(user_doc),
+        "user_doc_purpose": purpose,
+        "domain": domain,
+        "chunks": len(chunks),
+        "adversarial_threshold": adversarial_threshold,
+        "defense_passed": not is_flagged,
+        "reasons": reasons,
+    }
+    if is_flagged:
+        raise ValueError(
+            "User document failed adversarial validation and was not used. "
+            f"Reasons: {reasons}"
+        )
+    return chunks, validation
+
+
+def normalize_user_doc_path(path: Path) -> Path:
+    if path.exists():
+        return path
+    normalized = Path(str(path).replace("\\", "/"))
+    return normalized if normalized.exists() else path
+
+
+def generate_with_groq(prompt: str, model: str = DEFAULT_GROQ_MODEL, max_output_tokens: int = 500) -> str:
     try:
         from groq import Groq
     except ImportError as exc:
@@ -92,60 +182,38 @@ def generate_with_groq(prompt: str, model: str = DEFAULT_GROQ_MODEL) -> str:
         model=model,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.7,
-        max_completion_tokens=500,
+        max_completion_tokens=max_output_tokens,
     )
     return (completion.choices[0].message.content or "").strip()
 
 
-def generate_with_openai(prompt: str, model: str = DEFAULT_OPENAI_MODEL) -> str:
-    try:
-        from openai import OpenAI
-    except ImportError as exc:
-        raise RuntimeError("OpenAI generation requires `openai`. Install with `pip install -r requirements.txt`.") from exc
-
-    client = OpenAI()
-    response = client.responses.create(
-        model=model,
-        input=prompt,
-        temperature=0.7,
-        max_output_tokens=500,
-    )
-    return getattr(response, "output_text", "").strip()
-
-
-def generate_with_deepseek(prompt: str, model: str = DEFAULT_DEEPSEEK_MODEL) -> str:
-    try:
-        from openai import OpenAI
-    except ImportError as exc:
-        raise RuntimeError("DeepSeek generation requires `openai`. Install with `pip install -r requirements.txt`.") from exc
-
-    api_key = os.environ.get("DEEPSEEK_API_KEY")
-    if not api_key:
-        raise RuntimeError("DeepSeek generation requires DEEPSEEK_API_KEY to be set in your environment.")
-
+def generate_with_openai(prompt: str, model: str = DEFAULT_OPENAI_MODEL, max_output_tokens: int = 500) -> str:
+    import os
+    from openai import OpenAI
     client = OpenAI(
-        api_key=api_key,
-        base_url=os.environ.get("DEEPSEEK_BASE_URL", DEFAULT_DEEPSEEK_BASE_URL),
+        api_key=os.environ.get("OPENAI_API_KEY"),
+        base_url=os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
     )
-    completion = client.chat.completions.create(
+    response = client.chat.completions.create(
         model=model,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.7,
-        max_tokens=500,
+        max_tokens=max_output_tokens,
     )
-    return (completion.choices[0].message.content or "").strip()
+    return response.choices[0].message.content.strip()
 
 
 def generate_with_local(
     prompt: str,
     model: str = DEFAULT_LOCAL_MODEL,
     endpoint: str = DEFAULT_LOCAL_ENDPOINT,
+    max_output_tokens: int = 500,
 ) -> str:
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "stream": False,
-        "options": {"temperature": 0.7},
+        "options": {"temperature": 0.7, "num_predict": max_output_tokens},
     }
     request = Request(
         endpoint,
@@ -171,16 +239,20 @@ def call_generation_model(
     provider: str = "groq",
     model: str | None = None,
     local_endpoint: str = DEFAULT_LOCAL_ENDPOINT,
+    max_output_tokens: int = 500,
 ) -> str:
     if provider == "groq":
-        return generate_with_groq(prompt, model=model or DEFAULT_GROQ_MODEL)
-    if provider == "deepseek":
-        return generate_with_deepseek(prompt, model=model or DEFAULT_DEEPSEEK_MODEL)
+        return generate_with_groq(prompt, model=model or DEFAULT_GROQ_MODEL, max_output_tokens=max_output_tokens)
     if provider == "local":
-        return generate_with_local(prompt, model=model or DEFAULT_LOCAL_MODEL, endpoint=local_endpoint)
+        return generate_with_local(
+            prompt,
+            model=model or DEFAULT_LOCAL_MODEL,
+            endpoint=local_endpoint,
+            max_output_tokens=max_output_tokens,
+        )
     if provider == "openai":
-        return generate_with_openai(prompt, model=model or DEFAULT_OPENAI_MODEL)
-    raise ValueError(f"Unsupported generation provider. Expected one of: {', '.join(GENERATION_PROVIDERS)}.")
+        return generate_with_openai(prompt, model=model or DEFAULT_OPENAI_MODEL, max_output_tokens=max_output_tokens)
+    raise ValueError("Unsupported generation provider. Expected 'groq', 'local', or 'openai'.")
 
 
 def generate_response(
@@ -190,31 +262,26 @@ def generate_response(
     persona: dict | None = None,
     provider: str = "groq",
     model: str | None = None,
-    embedding_model_name: str = DEFAULT_MODEL,
-    embedding_model: SentenceTransformer | None = None,
     local_endpoint: str = DEFAULT_LOCAL_ENDPOINT,
+    user_doc_chunks: list[dict] | None = None,
+    user_doc_validation: dict | None = None,
     dry_run: bool = False,
-    upload_purpose: str | None = None,
-    upload_ids: list[str] | None = None,
 ) -> dict:
-    if upload_purpose or upload_ids:
-        chunks = retrieve_chunks_with_priority(
-            query=question,
-            top_k=top_k,
-            domain=domain,
-            model_name=embedding_model_name,
-            embedding_model=embedding_model,
-            upload_purpose=upload_purpose,
-            upload_ids=upload_ids,
-        )
+    if user_doc_chunks:
+        prioritized_user_chunks = score_chunks_lexical(question, user_doc_chunks)
+        clean_chunks = retrieve_chunks(query=question, top_k=top_k, domain=domain)
+        used_ids: set[str] = set()
+        chunks = []
+        for chunk in prioritized_user_chunks + clean_chunks:
+            chunk_id = str(chunk.get("chunk_id") or "")
+            if chunk_id in used_ids:
+                continue
+            chunks.append(chunk)
+            used_ids.add(chunk_id)
+            if len(chunks) >= top_k:
+                break
     else:
-        chunks = retrieve_chunks(
-            query=question,
-            top_k=top_k,
-            domain=domain,
-            model_name=embedding_model_name,
-            embedding_model=embedding_model,
-        )
+        chunks = retrieve_chunks(query=question, top_k=top_k, domain=domain)
     retrieved_context = format_retrieved_context(chunks)
     prompt = build_survey_response_prompt(
         question=question,
@@ -236,14 +303,12 @@ def generate_response(
         "persona": persona,
         "provider": provider,
         "model": model,
-        "embedding_model": embedding_model_name,
         "top_k": top_k,
         "retrieved_sources": source_refs(chunks),
+        "user_doc_validation": user_doc_validation,
         "prompt": prompt,
         "response": response_text,
         "dry_run": dry_run,
-        "upload_purpose": upload_purpose,
-        "upload_ids": upload_ids or [],
     }
 
 
@@ -254,14 +319,12 @@ def generate_responses(
     top_k: int = 3,
     provider: str = "groq",
     model: str | None = None,
-    embedding_model_name: str = DEFAULT_MODEL,
     local_endpoint: str = DEFAULT_LOCAL_ENDPOINT,
+    user_doc_chunks: list[dict] | None = None,
+    user_doc_validation: dict | None = None,
     dry_run: bool = False,
-    upload_purpose: str | None = None,
-    upload_ids: list[str] | None = None,
 ) -> list[dict]:
     records: list[dict] = []
-    embedding_model = load_embedding_model(embedding_model_name)
     for question in questions:
         for persona in personas:
             records.append(
@@ -272,12 +335,10 @@ def generate_responses(
                     persona=persona,
                     provider=provider,
                     model=model,
-                    embedding_model_name=embedding_model_name,
-                    embedding_model=embedding_model,
                     local_endpoint=local_endpoint,
+                    user_doc_chunks=user_doc_chunks,
+                    user_doc_validation=user_doc_validation,
                     dry_run=dry_run,
-                    upload_purpose=upload_purpose,
-                    upload_ids=upload_ids,
                 )
             )
     return records
@@ -293,23 +354,35 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--persona-file", type=Path, help="Optional JSONL persona file. Uses the first record.")
     parser.add_argument("--personas", type=Path, default=personas_path(), help="Personas JSON file.")
     parser.add_argument("--limit-personas", type=int, help="Only generate for the first N personas.")
-    parser.add_argument("--provider", default="groq", choices=GENERATION_PROVIDERS, help="Generation provider.")
+    parser.add_argument("--provider", default="groq", choices=("groq", "local", "openai"), help="Generation provider.")
     parser.add_argument("--model", default=None, help="Generation model. Defaults depend on provider.")
-    parser.add_argument("--embedding-model", default=DEFAULT_MODEL, help="Embedding model for retrieval.")
     parser.add_argument("--local-endpoint", default=DEFAULT_LOCAL_ENDPOINT, help="Local Ollama-compatible chat endpoint.")
-    parser.add_argument("--output", type=Path, default=synthetic_responses_path(), help="JSON output path.")
+    parser.add_argument("--user-doc", type=Path, help="Optional user document (.pdf, .txt, .md) to validate and prioritize.")
+    parser.add_argument("--user-doc-purpose", help="Purpose label for the user document.")
     parser.add_argument(
-        "--user-doc",
-        type=Path,
-        action="append",
-        dest="user_docs",
-        help="User-uploaded document to validate and prioritize during retrieval. Can be provided multiple times.",
+        "--adversarial-threshold",
+        type=float,
+        default=0.75,
+        help="Similarity threshold for user-doc adversarial detection.",
     )
     parser.add_argument(
-        "--user-doc-purpose",
+        "--embedding-model",
+        default=DEFAULT_MODEL,
+        help="Sentence-Transformers model used for user-doc validation.",
+    )
+    parser.add_argument(
+        "--judge-timeout",
+        type=int,
         default=None,
-        help="Purpose label used to prioritize the current uploaded documents during retrieval.",
+        help="Compatibility flag accepted for older docs; current user-doc validation is heuristic.",
     )
+    parser.add_argument(
+        "--judge-min-confidence",
+        type=float,
+        default=None,
+        help="Compatibility flag accepted for older docs; current user-doc validation is heuristic.",
+    )
+    parser.add_argument("--output", type=Path, default=synthetic_responses_path(), help="JSON output path.")
     parser.add_argument("--dry-run", action="store_true", help="Build prompt and retrieve context without calling an LLM.")
     return parser.parse_args()
 
@@ -328,48 +401,35 @@ def main() -> None:
     if not personas:
         raise ValueError("No personas available for generation.")
 
-    upload_ids: list[str] = []
-    validation_report: dict | None = None
-    if args.user_docs:
-        try:
-            from src.adversarial.upload_validate import validate_and_index_documents
-        except ImportError as exc:
-            raise RuntimeError(
-                "User-upload validation is not available in the current environment. "
-                "The base generation and Task 3 adversarial pipeline still work, but the "
-                "`--user-doc` path requires `src.adversarial.upload_validate`."
-            ) from exc
-
-        validation_report = validate_and_index_documents(
-            input_paths=args.user_docs,
-            domain=args.domain,
+    user_doc_chunks = None
+    user_doc_validation = None
+    generation_domain = args.domain
+    if args.user_doc:
+        args.user_doc = normalize_user_doc_path(args.user_doc)
+        if not args.user_doc.exists():
+            raise FileNotFoundError(f"User document does not exist: {args.user_doc}")
+        user_doc_domain = infer_user_doc_domain(args.domain, args.user_doc_purpose)
+        generation_domain = generation_domain or user_doc_domain
+        user_doc_chunks, user_doc_validation = prepare_user_doc_chunks(
+            user_doc=args.user_doc,
+            domain=user_doc_domain,
             purpose=args.user_doc_purpose,
+            adversarial_threshold=args.adversarial_threshold,
+            embedding_model_name=args.embedding_model,
         )
-        accepted_documents = validation_report.get("accepted_documents", [])
-        upload_ids = [str(record.get("upload_id")) for record in accepted_documents if record.get("upload_id")]
-        if not upload_ids:
-            raise ValueError("All uploaded documents were rejected by the defense pipeline; nothing was indexed.")
 
     records = generate_responses(
         questions=questions,
         personas=personas,
-        domain=args.domain,
+        domain=generation_domain,
         top_k=args.top_k,
         provider=args.provider,
         model=args.model,
-        embedding_model_name=args.embedding_model,
         local_endpoint=args.local_endpoint,
+        user_doc_chunks=user_doc_chunks,
+        user_doc_validation=user_doc_validation,
         dry_run=args.dry_run,
-        upload_purpose=args.user_doc_purpose,
-        upload_ids=upload_ids,
     )
-    if validation_report is not None:
-        for record in records:
-            record["upload_validation"] = {
-                "accepted_upload_ids": upload_ids,
-                "summary": validation_report.get("summary", {}),
-                "report_path": str(validation_report.get("report_path")),
-            }
     write_json(args.output, records)
 
     if args.dry_run:
@@ -378,9 +438,6 @@ def main() -> None:
             print("\n---\n")
     else:
         print(f"Generated {len(records)} synthetic responses.")
-    if validation_report is not None:
-        print(f"Validated {len(args.user_docs)} uploaded document(s).")
-        print(f"Defense report: {validation_report['report_path']}")
     print(f"Wrote generation records to {args.output}")
 
 

@@ -3,6 +3,10 @@ faiss-cpu
 numpy
 sentence-transformers
 
+# Data manipulation and analysis
+pandas
+dotenv
+
 # PDF parsing and page rendering
 PyMuPDF
 pypdf

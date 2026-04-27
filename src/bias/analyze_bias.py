@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from scipy.stats import chisquare, entropy
 
+from src.utils.helpers import bias_validation_outputs_dir
+
 
 # ── Helper Functions ─────────────────────────────────────
 def clean_label(val):
@@ -162,8 +164,9 @@ print(f"Employment: {acs_employment}")
 
 
 # ── Load Synthetic Survey Data ───────────────────────────
-gpt = pd.read_csv("data/outputs/gpt_synthetic_survey.csv")
-ds  = pd.read_csv("data/outputs/deepseek_synthetic_survey.csv")
+bias_output_dir = bias_validation_outputs_dir()
+gpt = pd.read_csv(bias_output_dir / "gpt_synthetic_survey.csv")
+ds  = pd.read_csv(bias_output_dir / "deepseek_synthetic_survey.csv")
 print(f"\nGPT records: {len(gpt)}")
 print(f"DeepSeek records: {len(ds)}")
 
@@ -281,7 +284,8 @@ report = {
     ),
 }
 
-Path("data/outputs").mkdir(parents=True, exist_ok=True)
-with open("data/outputs/model_comparison_report.json", "w") as f:
+report_path = bias_output_dir / "model_comparison_report.json"
+report_path.parent.mkdir(parents=True, exist_ok=True)
+with report_path.open("w", encoding="utf-8") as f:
     json.dump(report, f, indent=2)
-print("\n✅ Report saved → data/outputs/model_comparison_report.json")
+print(f"\n✅ Report saved → {report_path}")

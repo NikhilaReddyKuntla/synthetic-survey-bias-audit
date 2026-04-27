@@ -6,6 +6,8 @@ from openai import OpenAI
 from dotenv import load_dotenv
 from pathlib import Path
 
+from src.utils.helpers import bias_validation_outputs_dir
+
 load_dotenv(override=True)
 
 PROMPT = """Generate a synthetic survey dataset with exactly 50 records representing US customer base.
@@ -79,7 +81,7 @@ def main() -> None:
     df = pd.DataFrame(all_data)
     df['model'] = 'GPT-4o-mini'
 
-    output_path = Path("data/outputs/gpt_synthetic_survey.csv")
+    output_path = bias_validation_outputs_dir() / "gpt_synthetic_survey.csv"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(output_path, index=False)
 

@@ -25,12 +25,44 @@ def vector_store_dir() -> Path:
     return project_root() / "vector_store"
 
 
+def user_uploads_dir() -> Path:
+    return data_dir() / "user_docs" / "uploads"
+
+
+def user_validated_chunks_path() -> Path:
+    return data_dir() / "user_docs" / "validated_chunks.jsonl"
+
+
+def user_vector_store_dir() -> Path:
+    return vector_store_dir() / "user_uploads"
+
+
 def outputs_dir() -> Path:
     return data_dir() / "outputs"
 
 
+def generation_outputs_dir() -> Path:
+    return outputs_dir() / "generation"
+
+
+def bias_validation_outputs_dir() -> Path:
+    return outputs_dir() / "bias_validation"
+
+
+def attack_outputs_dir() -> Path:
+    return outputs_dir() / "attack"
+
+
+def user_upload_outputs_dir() -> Path:
+    return outputs_dir() / "user_uploads"
+
+
+def rag_validation_outputs_dir() -> Path:
+    return outputs_dir() / "rag_validation"
+
+
 def synthetic_responses_path() -> Path:
-    return outputs_dir() / "synthetic_responses.json"
+    return generation_outputs_dir() / "synthetic_responses.json"
 
 
 def user_docs_dir() -> Path:
