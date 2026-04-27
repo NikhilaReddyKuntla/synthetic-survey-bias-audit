@@ -173,8 +173,8 @@ def _build_attack_analysis_report(
 
     total = len(rows)
     avg_shift_clean_to_defended = safe_mean([row["semantic_shift_clean_to_defended_pct"] for row in rows])
-    attack_success_rate = (
-        sum(1 for row in rows if row["attack_success_clean_to_defended"]) / total * 100.0 if total else 0.0
+    response_shift_rate = (
+        sum(1 for row in rows if row["response_shift_clean_to_defended"]) / total * 100.0 if total else 0.0
     )
     defended_claim_rate = (
         sum(1 for row in rows if row["poisoned_claim_in_defended_response"]) / total * 100.0 if total else 0.0
@@ -191,6 +191,11 @@ def _build_attack_analysis_report(
         conclusion = (
             "Defense kept semantic drift relatively low, but poisoned claims still appear in too many defended answers."
         )
+    elif defended_claim_rate == 0.0:
+        conclusion = (
+            "The defense caused or coincided with some response shifts, but prevented poisoned target claims from "
+            "appearing in defended responses."
+        )
     else:
         conclusion = "Defense did not reduce attack influence under current heuristics; revise validation thresholds."
 
@@ -201,7 +206,11 @@ def _build_attack_analysis_report(
     lines.append(f"- Total evaluated pairs: {total}")
     lines.append(f"- Mean clean -> defended semantic shift: {avg_shift_clean_to_defended:.2f}%")
     lines.append(f"- Attack success threshold: {semantic_threshold:.2f}%")
-    lines.append(f"- Defended attack success rate: {attack_success_rate:.2f}%")
+    lines.append(f"- Response shift rate above threshold: {response_shift_rate:.2f}%")
+    lines.append(
+        "- Interpretation: this shift metric means the defended response differs semantically from the clean baseline; "
+        "it does not mean the poisoned claim was adopted."
+    )
     lines.append("")
     lines.append("## 2. Poisoned Claim Appearance in Responses")
     lines.append(f"- Defended responses mentioning target claims: {defended_claim_rate:.2f}%")
@@ -356,7 +365,15 @@ def main() -> None:
 
     embedding_model = None if args.dry_run else load_embedding_model(args.embedding_model)
 
-    validation_report = validate_attack_documents(attack_docs=attack_docs, trusted_chunks=clean_metadata)
+    validation_report = validate_attack_documents(
+        attack_docs=attack_docs,
+        trusted_chunks=clean_metadata,
+        provider=args.provider,
+        model=args.model,
+        local_endpoint=args.local_endpoint,
+        judge_timeout=args.judge_timeout,
+        judge_min_confidence=args.judge_min_confidence,
+    )
     write_json(args.validation_report_output, validation_report)
     defended_attack_docs = filter_attack_docs_by_trust(
         report=validation_report,
@@ -468,7 +485,7 @@ def main() -> None:
                     "semantic_shift_vs_clean_pct": defended_shift["semantic_shift_pct"],
                     "keyword_shift_vs_clean_pct": defended_shift["keyword_shift_pct"],
                     "poisoned_claim_mentioned": defended_claim_present,
-                    "attack_success": defended_shift["attack_success"],
+                    "response_shift_detected": defended_shift["attack_success"],
                 }
             )
             analysis_rows.append(
@@ -477,7 +494,7 @@ def main() -> None:
                     "prompt": question,
                     "domain": args.domain,
                     "semantic_shift_clean_to_defended_pct": defended_shift["semantic_shift_pct"],
-                    "attack_success_clean_to_defended": defended_shift["attack_success"],
+                    "response_shift_clean_to_defended": defended_shift["attack_success"],
                     "poisoned_claim_in_defended_response": defended_claim_present,
                 }
             )

@@ -33,6 +33,7 @@ def evaluate_attack_document(
 ) -> dict:
     domain = str(attack_doc.get("domain") or "general").strip().lower() or "general"
     attack_type = attack_doc.get("attack_type")
+    intended_trust_score = attack_doc.get("intended_trust_score")
     target_claim = str(attack_doc.get("target_claim") or "").strip()
     poisoned_text = str(attack_doc.get("poisoned_text") or "").strip()
 
@@ -57,6 +58,7 @@ def evaluate_attack_document(
     return {
         "domain": domain,
         "attack_type": attack_type,
+        "intended_trust_score": intended_trust_score,
         "target_claim": target_claim,
         "poisoned_text": poisoned_text,
         "trust_score": final_trust,  # compatibility alias
@@ -69,6 +71,7 @@ def evaluate_attack_document(
         "has_unverified_stats": decision["has_unverified_stats"],
         "has_prompt_injection": decision["has_prompt_injection"],
         "unsupported_claim": decision["unsupported_claim"],
+        "near_supported_claim": decision.get("near_supported_claim"),
         "low_alignment": decision["low_alignment"],
         "judge_verdict": decision["judge_verdict"],
         "judge_confidence": decision["judge_confidence"],

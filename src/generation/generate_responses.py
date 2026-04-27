@@ -8,9 +8,12 @@ from urllib.request import Request, urlopen
 
 from src.attacks.poison_utils import build_adversarial_templates, tokenize
 from src.rag.embed import DEFAULT_MODEL
+from src.rag.ingest import slugify
 from src.rag.retrieve import format_retrieved_context, retrieve_chunks
+from src.utils.doc_utils import extract_clean_document_text
 from src.utils.helpers import personas_path, read_json, read_jsonl, synthetic_responses_path, write_json
 from src.utils.prompt_templates import build_survey_response_prompt
+from src.utils.text_utils import chunk_text
 
 DEFAULT_LOCAL_ENDPOINT = "http://localhost:11434/api/chat"
 DEFAULT_LOCAL_MODEL = "llama3.1"
@@ -135,14 +138,25 @@ def prepare_user_doc_chunks(
     purpose: str | None,
     adversarial_threshold: float,
     embedding_model_name: str = DEFAULT_MODEL,
+    fail_on_flagged: bool = True,
 ) -> tuple[list[dict], dict]:
-    from src.pipeline.document_pipeline import build_upload_chunks, parse_document
-
-    text_chunks = parse_document(user_doc)
-    if not text_chunks:
+    text = extract_clean_document_text(user_doc)
+    if not text:
         raise ValueError(f"User document produced no text after parsing: {user_doc}")
 
-    chunks = build_upload_chunks(text_chunks=text_chunks, doc_path=user_doc, domain=domain)
+    source_slug = slugify(user_doc.stem)
+    chunks = [
+        {
+            "chunk_id": f"user_doc_{source_slug}_text_{index:03d}",
+            "chunk_type": "text",
+            "domain": domain,
+            "source_file": user_doc.name,
+            "source_kind": "user_upload",
+            "upload_purpose": purpose,
+            "text": chunk,
+        }
+        for index, chunk in enumerate(chunk_text(text, chunk_size=450, chunk_overlap=80), start=1)
+    ]
     for chunk in chunks:
         chunk["source_kind"] = "user_upload"
         chunk["upload_purpose"] = purpose
@@ -157,12 +171,55 @@ def prepare_user_doc_chunks(
         "defense_passed": not is_flagged,
         "reasons": reasons,
     }
-    if is_flagged:
+    if is_flagged and fail_on_flagged:
         raise ValueError(
             "User document failed adversarial validation and was not used. "
             f"Reasons: {reasons}"
         )
     return chunks, validation
+
+
+def prepare_user_docs_chunks(
+    user_docs: list[Path],
+    domain: str,
+    purpose: str | None,
+    adversarial_threshold: float,
+    embedding_model_name: str = DEFAULT_MODEL,
+) -> tuple[list[dict], dict]:
+    accepted_chunks: list[dict] = []
+    accepted_documents: list[dict] = []
+    rejected_documents: list[dict] = []
+
+    for user_doc in user_docs:
+        chunks, validation = prepare_user_doc_chunks(
+            user_doc=user_doc,
+            domain=domain,
+            purpose=purpose,
+            adversarial_threshold=adversarial_threshold,
+            embedding_model_name=embedding_model_name,
+            fail_on_flagged=False,
+        )
+        if validation["defense_passed"]:
+            accepted_chunks.extend(chunks)
+            accepted_documents.append(validation)
+        else:
+            rejected_documents.append(validation)
+
+    validation_report = {
+        "mode": "multi_user_doc_priority_retrieval",
+        "domain": domain,
+        "user_doc_purpose": purpose,
+        "total_documents": len(user_docs),
+        "accepted_documents": len(accepted_documents),
+        "rejected_documents": len(rejected_documents),
+        "accepted_chunks": len(accepted_chunks),
+        "adversarial_threshold": adversarial_threshold,
+        "accepted": accepted_documents,
+        "rejected": rejected_documents,
+    }
+    if not accepted_chunks:
+        raise ValueError("All user documents were rejected; no user-upload context is available for generation.")
+    return accepted_chunks, validation_report
 
 
 def normalize_user_doc_path(path: Path) -> Path:
@@ -259,7 +316,7 @@ def call_generation_model(
 def generate_response(
     question: str,
     domain: str | None = None,
-    top_k: int = 3,
+    top_k: int = 5,
     persona: dict | None = None,
     provider: str = "groq",
     model: str | None = None,
@@ -317,7 +374,7 @@ def generate_responses(
     questions: list[str],
     personas: list[dict],
     domain: str | None = None,
-    top_k: int = 3,
+    top_k: int = 5,
     provider: str = "groq",
     model: str | None = None,
     local_endpoint: str = DEFAULT_LOCAL_ENDPOINT,
@@ -350,7 +407,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--question", action="append", help="Survey question to answer. Can be provided multiple times.")
     parser.add_argument("--questions-file", type=Path, help="Text file with one question per line, or JSON list.")
     parser.add_argument("--domain", choices=("ecommerce", "finance", "healthcare"), help="Optional RAG domain filter.")
-    parser.add_argument("--top-k", type=int, default=3, help="Number of RAG chunks to retrieve.")
+    parser.add_argument("--top-k", type=int, default=5, help="Number of RAG chunks to retrieve.")
     parser.add_argument("--persona-json", help="Optional persona as a JSON object string.")
     parser.add_argument("--persona-file", type=Path, help="Optional JSONL persona file. Uses the first record.")
     parser.add_argument("--personas", type=Path, default=personas_path(), help="Personas JSON file.")
@@ -358,7 +415,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--provider", default="groq", choices=GENERATION_PROVIDERS, help="Generation provider.")
     parser.add_argument("--model", default=None, help="Generation model. Defaults depend on provider.")
     parser.add_argument("--local-endpoint", default=DEFAULT_LOCAL_ENDPOINT, help="Local Ollama-compatible chat endpoint.")
-    parser.add_argument("--user-doc", type=Path, help="Optional user document (.pdf, .txt, .md) to validate and prioritize.")
+    parser.add_argument(
+        "--user-doc",
+        type=Path,
+        action="append",
+        help="Optional user document (.pdf, .txt, .md, .docx, .json) to validate and prioritize. Can be repeated.",
+    )
     parser.add_argument("--user-doc-purpose", help="Purpose label for the user document.")
     parser.add_argument(
         "--adversarial-threshold",
@@ -406,13 +468,14 @@ def main() -> None:
     user_doc_validation = None
     generation_domain = args.domain
     if args.user_doc:
-        args.user_doc = normalize_user_doc_path(args.user_doc)
-        if not args.user_doc.exists():
-            raise FileNotFoundError(f"User document does not exist: {args.user_doc}")
+        args.user_doc = [normalize_user_doc_path(path) for path in args.user_doc]
+        missing_docs = [path for path in args.user_doc if not path.exists()]
+        if missing_docs:
+            raise FileNotFoundError(f"User document does not exist: {missing_docs[0]}")
         user_doc_domain = infer_user_doc_domain(args.domain, args.user_doc_purpose)
         generation_domain = generation_domain or user_doc_domain
-        user_doc_chunks, user_doc_validation = prepare_user_doc_chunks(
-            user_doc=args.user_doc,
+        user_doc_chunks, user_doc_validation = prepare_user_docs_chunks(
+            user_docs=args.user_doc,
             domain=user_doc_domain,
             purpose=args.user_doc_purpose,
             adversarial_threshold=args.adversarial_threshold,

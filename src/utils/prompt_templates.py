@@ -24,15 +24,17 @@ def build_survey_response_prompt(
 You are answering as the following respondent:
 {persona_block}
 
-Use the following background context to answer realistically:
+Use the following retrieved background context where it is relevant:
 {retrieved_context}
 
 Survey question:
 {question}
 
 Answer from the respondent's perspective.
-Use the trusted retrieved context as background information, but do not copy it directly.
+Use only the provided context where it is relevant.
+If the context does not support a specific claim, answer generally from the persona's perspective.
+Do not copy the context directly.
 Do not invent precise statistics unless they appear in the retrieved context.
-Keep the response concise and survey-like.
+Keep the response short: 1-2 survey-style sentences.
 Return only the respondent's answer.
 """.strip()

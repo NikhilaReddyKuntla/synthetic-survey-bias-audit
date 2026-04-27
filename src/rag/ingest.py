@@ -10,10 +10,13 @@ from src.utils.pdf_utils import extract_pdf_pages_text, page_has_visual_content
 from src.utils.text_utils import chunk_text, clean_text, extract_year
 
 ALLOWED_DOMAINS = ("ecommerce", "finance", "healthcare")
+SUPPORTED_SOURCE_EXTENSIONS = (".pdf", ".txt", ".md")
 
 
 def infer_doc_type(file_name: str) -> str:
     lowered = file_name.lower()
+    if "synthetic" in lowered or "product_x" in lowered or "product-x" in lowered:
+        return "synthetic_project_context"
     if "data-book" in lowered:
         return "data_book"
     if "insurance" in lowered:
@@ -50,9 +53,13 @@ def discover_source_pdfs(input_paths: list[Path] | None = None, domain: str | No
     if input_paths:
         discovered: list[tuple[Path, str]] = []
         for input_path in input_paths:
-            paths = sorted(input_path.rglob("*.pdf")) if input_path.is_dir() else [input_path]
+            paths = (
+                sorted(path for path in input_path.rglob("*") if path.suffix.lower() in SUPPORTED_SOURCE_EXTENSIONS)
+                if input_path.is_dir()
+                else [input_path]
+            )
             for pdf_path in paths:
-                if pdf_path.suffix.lower() != ".pdf":
+                if pdf_path.suffix.lower() not in SUPPORTED_SOURCE_EXTENSIONS:
                     continue
                 discovered.append((pdf_path, infer_domain(pdf_path, domain=domain)))
         return discovered
@@ -64,16 +71,57 @@ def discover_source_pdfs(input_paths: list[Path] | None = None, domain: str | No
         domain_dir = raw_sources_dir / allowed_domain
         if not domain_dir.exists():
             continue
-        pdfs.extend((pdf_path, allowed_domain) for pdf_path in sorted(domain_dir.rglob("*.pdf")))
+        pdfs.extend(
+            (source_path, allowed_domain)
+            for source_path in sorted(domain_dir.rglob("*"))
+            if source_path.suffix.lower() in SUPPORTED_SOURCE_EXTENSIONS
+        )
 
     return pdfs
+
+
+def build_text_file_chunks(
+    source_path: Path,
+    domain: str,
+    chunk_size: int = 450,
+    chunk_overlap: int = 80,
+) -> list[dict]:
+    file_name = source_path.name
+    year = extract_year(file_name)
+    doc_type = infer_doc_type(file_name)
+    file_stem = slugify(source_path.stem)
+
+    try:
+        raw_text = source_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        raw_text = source_path.read_text(encoding="utf-8", errors="ignore")
+
+    cleaned_text = clean_text(raw_text)
+    if not cleaned_text:
+        return []
+
+    return [
+        {
+            "chunk_id": f"{domain}_{file_stem}_text_{chunk_index:03d}",
+            "chunk_type": "text",
+            "domain": domain,
+            "source_file": file_name,
+            "doc_type": doc_type,
+            "year": year,
+            "text": chunk,
+        }
+        for chunk_index, chunk in enumerate(
+            chunk_text(cleaned_text, chunk_size=chunk_size, chunk_overlap=chunk_overlap),
+            start=1,
+        )
+    ]
 
 
 def build_pdf_chunks(
     pdf_path: Path,
     domain: str,
-    chunk_size: int = 700,
-    chunk_overlap: int = 120,
+    chunk_size: int = 450,
+    chunk_overlap: int = 80,
     include_visual_summaries: bool = False,
     vision_provider: str = "groq",
     vision_model: str | None = None,
@@ -81,6 +129,14 @@ def build_pdf_chunks(
     vision_image_zoom: float = 1.5,
     local_vision_endpoint: str = "http://localhost:11434/api/chat",
 ) -> list[dict]:
+    if pdf_path.suffix.lower() in {".txt", ".md"}:
+        return build_text_file_chunks(
+            source_path=pdf_path,
+            domain=domain,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+        )
+
     chunks: list[dict] = []
     file_name = pdf_path.name
     year = extract_year(file_name)
@@ -150,8 +206,8 @@ def build_pdf_chunks(
 
 
 def build_chunks(
-    chunk_size: int = 700,
-    chunk_overlap: int = 120,
+    chunk_size: int = 450,
+    chunk_overlap: int = 80,
     input_paths: list[Path] | None = None,
     domain: str | None = None,
     include_visual_summaries: bool = False,
@@ -190,8 +246,8 @@ def merge_chunks(existing_chunks: list[dict], new_chunks: list[dict]) -> list[di
 
 
 def ingest_documents(
-    chunk_size: int = 700,
-    chunk_overlap: int = 120,
+    chunk_size: int = 450,
+    chunk_overlap: int = 80,
     output_path: Path | None = None,
     input_paths: list[Path] | None = None,
     domain: str | None = None,
@@ -224,8 +280,8 @@ def ingest_documents(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build JSONL chunks from curated RAG PDFs.")
-    parser.add_argument("--chunk-size", type=int, default=700, help="Chunk size in words.")
-    parser.add_argument("--chunk-overlap", type=int, default=120, help="Chunk overlap in words.")
+    parser.add_argument("--chunk-size", type=int, default=450, help="Chunk size in words.")
+    parser.add_argument("--chunk-overlap", type=int, default=80, help="Chunk overlap in words.")
     parser.add_argument(
         "--input",
         type=Path,

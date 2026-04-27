@@ -119,6 +119,7 @@ def attack_docs_to_poison_chunks(
         domain = str(attack_doc.get("domain") or "general").strip() or "general"
         attack_type = str(attack_doc.get("attack_type") or "custom_attack").strip() or "custom_attack"
         target_claim = str(attack_doc.get("target_claim") or "").strip()
+        intended_trust_score = str(attack_doc.get("intended_trust_score") or "").strip()
         poisoned_text = str(attack_doc.get("poisoned_text") or attack_doc.get("text") or "").strip()
         if not poisoned_text:
             continue
@@ -145,6 +146,7 @@ def attack_docs_to_poison_chunks(
                 "year": int(attack_doc.get("year") or 2026),
                 "attack_type": attack_type,
                 "target_claim": target_claim,
+                "intended_trust_score": intended_trust_score or None,
                 "text": poisoned_text,
             }
         )

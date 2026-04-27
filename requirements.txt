@@ -5,6 +5,7 @@ sentence-transformers
 
 # Data manipulation and analysis
 pandas
+matplotlib
 dotenv
 
 # PDF parsing and page rendering

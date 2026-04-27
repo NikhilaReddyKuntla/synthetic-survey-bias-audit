@@ -15,6 +15,7 @@ JUDGE_VERDICTS = ("supported", "contradicted", "unverifiable")
 LOW_ALIGNMENT_THRESHOLD = 0.045
 LOW_SUPPORT_THRESHOLD = 0.08
 UNSUPPORTED_CLAIM_THRESHOLD = 0.12
+NEAR_SUPPORT_THRESHOLD = 0.085
 
 DEFAULT_JUDGE_TIMEOUT = 20
 DEFAULT_JUDGE_MIN_CONFIDENCE = 0.70
@@ -144,7 +145,8 @@ def static_assess_candidate(
     has_unverified_stats = _contains_unverified_statistical_claim(normalized_text) and support_score < LOW_SUPPORT_THRESHOLD
     has_absolute_language = _contains_absolute_language(combined_text) and support_score < LOW_SUPPORT_THRESHOLD
     low_alignment = support_score < LOW_ALIGNMENT_THRESHOLD
-    unsupported_claim = bool(claim_text) and claim_support < UNSUPPORTED_CLAIM_THRESHOLD
+    near_supported_claim = bool(claim_text) and claim_support >= NEAR_SUPPORT_THRESHOLD
+    unsupported_claim = bool(claim_text) and claim_support < NEAR_SUPPORT_THRESHOLD
 
     reasons: list[str] = []
     if has_prompt_injection:
@@ -160,6 +162,8 @@ def static_assess_candidate(
 
     if has_prompt_injection or unsupported_claim or has_unverified_stats or has_absolute_language:
         provisional_trust_score = "low"
+    elif claim_text and claim_support < UNSUPPORTED_CLAIM_THRESHOLD and near_supported_claim:
+        provisional_trust_score = "medium"
     elif low_alignment:
         provisional_trust_score = "medium"
     else:
@@ -187,6 +191,7 @@ def static_assess_candidate(
         "has_unverified_stats": has_unverified_stats,
         "has_prompt_injection": has_prompt_injection,
         "unsupported_claim": unsupported_claim,
+        "near_supported_claim": near_supported_claim,
         "reasons": reasons,
         "trusted_evidence_chunks": trusted_chunks,
     }
@@ -449,7 +454,9 @@ def evaluate_defense_candidate(
 
     if defense_passed:
         final_trust_score = "high"
-    elif static["provisional_trust_score"] == "medium" and judge_verdict == "supported":
+    elif static["provisional_trust_score"] == "medium" and judge_verdict in {"supported", "unverifiable"}:
+        final_trust_score = "medium"
+    elif static["provisional_trust_score"] == "high" and judge_verdict == "unverifiable":
         final_trust_score = "medium"
     else:
         final_trust_score = "low"
