@@ -116,6 +116,16 @@ instruction_docs/         command reference
 
 ## Setup
 
+### Data Bundle
+
+Large data artifacts are not tracked in git because `data/`, `vector_store/`, PDFs, CSVs, and Excel files are excluded from the repository. To reproduce the final notebook results, download the project data bundle here:
+
+[Download data bundle from Filen](https://app.filen.io/#/f/57f2e1df-88ca-41f9-b3b9-03e93d659f54%23743674424e785a4644796b2d6f68304731364961636465466778706567614d64)
+
+After downloading, extract the bundle into the repository root so paths such as `data/raw_sources/`, `data/personas/`, `data/user_docs/`, and `data/outputs/` are available. Then follow the execution process below to rebuild chunks, vectors, validation outputs, and notebook metrics.
+
+The Product X domain documents are synthetic company-style context documents, not real proprietary company data. We used synthetic finance, ecommerce, and healthcare product context to test realistic RAG survey behavior without exposing confidential company strategy, customer insights, pricing, or internal research to a student project or hosted LLM APIs.
+
 Run from the repository root.
 
 ```bash
@@ -134,6 +144,8 @@ export GROQ_API_KEY="your_groq_key"
 OpenAI is the recommended provider for the current commands because it avoids Groq daily token limits during repeated project runs.
 
 ## Execution Process
+
+After cloning the repo and extracting the data bundle into the repository root, run the following commands from the repository root.
 
 ### 1. Generate Personas
 
