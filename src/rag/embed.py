@@ -4,7 +4,6 @@ import argparse
 import json
 from pathlib import Path
 
-import faiss
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
@@ -19,10 +18,10 @@ def load_embedding_model(model_name: str) -> SentenceTransformer:
         return _EMBEDDING_MODEL_CACHE[model_name]
 
     try:
-        model = SentenceTransformer(model_name)
+        model = SentenceTransformer(model_name, local_files_only=True, device="cpu")
     except Exception as exc:
         try:
-            model = SentenceTransformer(model_name, local_files_only=True)
+            model = SentenceTransformer(model_name, device="cpu")
         except Exception:
             raise RuntimeError(
                 f"Unable to load embedding model '{model_name}'. "
@@ -30,6 +29,23 @@ def load_embedding_model(model_name: str) -> SentenceTransformer:
             ) from exc
     _EMBEDDING_MODEL_CACHE[model_name] = model
     return model
+
+
+def build_embedding_text(chunk: dict) -> str:
+    """Add lightweight metadata so short survey queries match document intent."""
+    metadata_parts = [
+        f"Domain: {chunk.get('domain')}",
+        f"Document type: {chunk.get('doc_type')}",
+        f"Source: {chunk.get('source_file')}",
+        f"Year: {chunk.get('year')}",
+        f"Chunk type: {chunk.get('chunk_type', 'text')}",
+    ]
+    page_number = chunk.get("page_number")
+    if page_number:
+        metadata_parts.append(f"Page: {page_number}")
+
+    metadata_text = " | ".join(part for part in metadata_parts if not part.endswith(": None"))
+    return f"{metadata_text}\n\n{chunk.get('text', '')}".strip()
 
 
 def embed_chunks(
@@ -50,8 +66,10 @@ def embed_chunks(
     metadata_path = output_dir / "rag_metadata.json"
 
     existing_metadata: list[dict] = []
-    index: faiss.Index | None = None
+    index = None
     if append and index_path.exists() and metadata_path.exists():
+        import faiss
+
         index = faiss.read_index(str(index_path))
         with metadata_path.open("r", encoding="utf-8") as handle:
             existing_metadata = json.load(handle)
@@ -62,9 +80,11 @@ def embed_chunks(
             return index_path, metadata_path
 
     model = load_embedding_model(model_name)
-    texts = [chunk["text"] for chunk in chunks]
-    embeddings = model.encode(texts, normalize_embeddings=True, show_progress_bar=True)
+    texts = [build_embedding_text(chunk) for chunk in chunks]
+    embeddings = model.encode(texts, normalize_embeddings=True, show_progress_bar=False)
     embedding_matrix = np.asarray(embeddings, dtype="float32")
+
+    import faiss
 
     if index is None:
         index = faiss.IndexFlatIP(embedding_matrix.shape[1])

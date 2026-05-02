@@ -6,7 +6,6 @@ import re
 from pathlib import Path
 from typing import Iterable
 
-import faiss
 import numpy as np
 
 from src.rag.embed import DEFAULT_MODEL, load_embedding_model
@@ -167,6 +166,8 @@ def create_poisoned_vector_store(
     injected_chunks: list[dict] | None = None,
     unsafe_allow_main_store_write: bool = False,
 ) -> dict:
+    import faiss
+
     if not clean_index_path.exists():
         raise FileNotFoundError(f"Clean FAISS index does not exist: {clean_index_path}")
     if not clean_metadata_path.exists():

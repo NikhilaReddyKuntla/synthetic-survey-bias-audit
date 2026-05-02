@@ -1,4 +1,4 @@
-How likely is this customer to choose Product X over competing alternatives, and what factors matter most?
-How trustworthy does Product X seem compared with other options in this market?
-What would make this customer recommend or avoid Product X?
-Which concerns would most influence this customer's final decision about Product X?
+For Product X Finance, how do monthly cash flow, bill reminders, savings realism, debt pressure, privacy, and account-linking security affect whether this customer would choose the product?
+For Product X Ecommerce, how do transparent pricing, delivery reliability, return policy clarity, review trust, hidden fees, and buyer protection affect whether this customer would choose the product?
+For Product X Healthcare, how do insurance coverage, out-of-pocket cost estimates, provider availability, privacy protection, appointment preparation, and safety limitations affect whether this customer would choose the product?
+Would this customer recommend Product X, and which specific trust drivers or barriers from the company research would matter most?

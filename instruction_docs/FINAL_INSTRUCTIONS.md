@@ -1,306 +1,300 @@
 # Final Project Instructions
 
-This project audits LLM-generated synthetic surveys for two risks:
+This project audits synthetic survey generation across three connected risks:
 
-1. Demographic bias in generated survey populations and answers.
-2. Adversarial manipulation of RAG context through poisoned or user-uploaded documents.
+1. Bias in synthetic personas and survey answers.
+2. Weak grounding in RAG-generated answers.
+3. Adversarial or malicious documents entering the retrieval pipeline.
 
-The repository has five main workflows:
-
-1. Bias detection.
-2. Persona generation and survey response generation.
-3. Trusted RAG document ingestion, embedding, and retrieval.
-4. Adversarial testing against poisoned RAG context.
-5. User document upload, validation, indexing, and priority retrieval.
-
-Run commands from the repository root:
+Run everything from the repository root:
 
 ```bash
 cd /Users/pgeesala/Desktop/synthetic-survey-bias-audit
+source .venv/bin/activate
 ```
 
-Use module mode for source files:
+Use module execution for source files:
 
 ```bash
 python -m src.package.module
 ```
 
-## 1. Project Agenda
+## Problem Statement
 
-The project simulates survey responses from synthetic personas, grounds responses in trusted documents through RAG, and then audits the outputs.
+LLMs can generate useful synthetic survey responses, but their outputs may:
 
-The main questions are:
+- overrepresent or underrepresent demographic groups,
+- answer from model prior knowledge instead of project evidence,
+- become vulnerable when retrieved context contains poisoned documents,
+- trust user-uploaded files that include prompt injection or fake claims.
 
-- Do generated personas and responses reflect real demographic distributions?
-- Do models overrepresent or underrepresent demographic groups?
-- Does retrieved context improve grounded response generation?
-- Can poisoned documents shift generated survey answers?
-- Can a lightweight defense layer detect or reduce poisoned-context influence?
-- Can user-uploaded documents be accepted only when they pass adversarial checks?
+The project solves this by combining ACS-based persona generation, RAG grounding, model comparison for bias, adversarial document validation, and user-upload trust gating.
 
-## 2. Repository Structure
+## Tools Used
 
-Important source modules:
+- Python: main implementation language for reproducible CLI pipelines.
+- Pandas and NumPy: demographic analysis, CSV processing, summary metrics.
+- SciPy: chi-square and KL-divergence style bias measurements.
+- SentenceTransformers: local embedding model for retrieval.
+- FAISS: fast vector search over trusted and uploaded document chunks.
+- OpenAI, Groq, DeepSeek: hosted LLM providers for response generation, baseline comparison, and defense judging.
+- Matplotlib: final notebook visualizations.
+- PyPDF/text parsing utilities: extracting source text from PDFs, TXT, and Markdown files.
 
-- `src/persona/generate_personas.py`: builds ACS-weighted synthetic personas.
-- `src/rag/ingest.py`: extracts, cleans, chunks, and saves trusted PDF text.
-- `src/rag/embed.py`: embeds chunks into a FAISS vector store.
-- `src/rag/retrieve.py`: retrieves trusted context for survey questions.
-- `src/generation/generate_responses.py`: builds persona + RAG prompts and calls an LLM.
-- `src/bias/generate_gpt_survey.py`: generates a GPT synthetic survey dataset for bias comparison.
-- `src/bias/generate_deepseek_survey.py`: generates a DeepSeek synthetic survey dataset for bias comparison.
-- `src/bias/analyze_bias.py`: compares synthetic survey demographics against ACS benchmarks.
-- `src/attacks/run_attack.py`: runs clean vs poisoned RAG response generation.
-- `src/defense/defense.py`: filters poisoned retrieval sources and generates defended responses.
-- `src/pipeline/document_pipeline.py`: handles user-upload document parsing, adversarial screening, indexing, and priority retrieval.
+Why these tools:
 
-Important data locations:
+- FAISS plus SentenceTransformers keeps retrieval local, fast, and cheap.
+- Hosted LLMs allow direct comparison between model families.
+- ACS data gives a real demographic benchmark instead of evaluating bias only by intuition.
+- A separate defense layer makes adversarial behavior measurable instead of hidden inside generation output.
 
-- `data/raw_sources/acs/`: ACS demographic CSVs.
-- `data/raw_sources/ecommerce/`: trusted ecommerce PDFs.
-- `data/raw_sources/finance/`: trusted finance PDFs.
-- `data/raw_sources/healthcare/`: trusted healthcare PDFs.
-- `data/personas/personas.json`: generated persona file.
+## Main Data Sources
+
+- `data/raw_sources/acs/`: ACS demographic benchmark CSVs.
+- `data/raw_sources/ecommerce/`: ecommerce trusted source docs and synthetic Product X context.
+- `data/raw_sources/finance/`: finance trusted source docs and synthetic Product X context.
+- `data/raw_sources/healthcare/`: healthcare trusted source docs and synthetic Product X context.
+- `data/user_docs/uploads/`: example user-upload documents, including benign and malicious files.
+- `data/user_docs/attacks/`: generated adversarial test documents.
+
+## Main Outputs
+
+- `data/personas/personas.json`: ACS-weighted synthetic personas.
 - `data/rag_docs/rag_chunks.jsonl`: trusted RAG chunks.
-- `vector_store/rag_index.faiss`: trusted FAISS index.
-- `vector_store/rag_metadata.json`: trusted chunk metadata.
+- `vector_store/rag_index.faiss`: trusted vector index.
+- `vector_store/rag_metadata.json`: metadata aligned with the trusted FAISS index.
+- `data/outputs/rag_validation/`: retrieval validation outputs.
 - `data/outputs/generation/`: RAG-backed synthetic survey responses.
-- `data/outputs/bias_validation/`: bias datasets and comparison report.
-- `data/outputs/attack/`: adversarial validation, attack responses, and attack reports.
-- `data/outputs/user_uploads/`: user-upload validation reports.
-- `data/outputs/rag_validation/`: reserved for retrieval/RAG validation outputs.
-- `results/`: legacy adversarial attack and defense outputs.
+- `data/outputs/bias_validation/`: GPT/DeepSeek survey outputs and bias comparison report.
+- `data/outputs/attack/`: adversarial validation and clean-vs-defended attack results.
+- `data/outputs/user_uploads/`: user document validation reports.
 
-## 3. Environment
+## Source File Guide
 
-Create and activate a virtual environment, then install dependencies:
+### Persona Files
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
+- `src/persona/generate_personas.py`
+  - Reads ACS distributions.
+  - Samples realistic demographic personas.
+  - Writes `data/personas/personas.json`.
+  - Used because final survey generation should start from controlled demographic profiles.
 
-Hosted model calls require API keys:
+### RAG Files
 
-```bash
-export OPENAI_API_KEY="your_openai_key"
-export GROQ_API_KEY="your_groq_key"
-export DEEPSEEK_API_KEY="your_deepseek_key"
-```
+- `src/rag/ingest.py`
+  - Reads PDFs, TXT, and Markdown files from trusted domain folders.
+  - Cleans and chunks text.
+  - Tags chunks with domain, source file, document type, year, and chunk id.
+  - Writes `data/rag_docs/rag_chunks.jsonl`.
 
-Local generation uses an Ollama-compatible endpoint:
+- `src/rag/embed.py`
+  - Loads `all-MiniLM-L6-v2` by default.
+  - Embeds all RAG chunks.
+  - Stores vectors in FAISS and metadata in JSON.
+  - Used because retrieval needs fast semantic matching.
 
-```text
-http://localhost:11434/api/chat
-```
+- `src/rag/retrieve.py`
+  - Embeds a query.
+  - Searches FAISS.
+  - Supports `--domain` filtering and `--top-k`.
+  - Writes retrieval validation files for notebook analysis.
 
-## 4. End-to-End Flow
+- `src/rag/vision.py`
+  - Optional visual-page summarization support for PDFs.
+  - Useful only when PDF pages contain meaningful visual information.
 
-The full project flow is:
+### Generation Files
 
-1. Generate personas from ACS demographic distributions.
-2. Ingest trusted PDFs into cleaned RAG chunks.
-3. Embed chunks into a FAISS vector store.
-4. Retrieve trusted context for survey questions.
-5. Generate persona-grounded synthetic survey responses.
-6. Generate model-specific survey datasets for bias analysis.
-7. Compare synthetic distributions to ACS benchmarks.
-8. Run poisoned-RAG adversarial testing.
-9. Run defense filtering against poisoned retrieval.
-10. Validate and optionally index user-uploaded documents.
+- `src/generation/generate_responses.py`
+  - Loads questions and personas.
+  - Retrieves top-k RAG chunks.
+  - Builds a short survey-style prompt.
+  - Calls OpenAI, Groq, or a local endpoint.
+  - Supports repeated `--user-doc` uploads.
+  - Validates uploaded docs before using them as priority context.
+  - Writes synthetic responses to `data/outputs/generation/`.
 
-## 5. Bias Detection
+- `src/utils/prompt_templates.py`
+  - Central prompt builder.
+  - Instructs the model to use provided context where relevant and keep answers short.
+  - Used so generation, attack, and defended runs share consistent prompt behavior.
 
-Bias detection compares synthetic survey records against ACS demographic distributions.
+### Bias Files
 
-The implemented bias path uses:
+- `src/bias/generate_gpt_survey.py`
+  - Generates GPT baseline synthetic survey data.
+  - Writes `gpt_synthetic_survey.csv`.
 
-- GPT synthetic survey output: `data/outputs/bias_validation/gpt_synthetic_survey.csv`
-- DeepSeek synthetic survey output: `data/outputs/bias_validation/deepseek_synthetic_survey.csv`
-- ACS benchmark CSVs in `data/raw_sources/acs/`
+- `src/bias/generate_deepseek_survey.py`
+  - Generates DeepSeek baseline synthetic survey data.
+  - Writes `deepseek_synthetic_survey.csv`.
 
-Then `src/bias/analyze_bias.py` computes:
+- `src/bias/analyze_bias.py`
+  - Compares GPT and DeepSeek outputs against ACS distributions.
+  - Measures demographic gaps, chi-square behavior, KL divergence, and response differences.
+  - Writes `model_comparison_report.json`.
 
-- Race distribution gaps.
-- Gender distribution gaps.
-- Age distribution gaps.
-- Income distribution gaps.
-- Education distribution gaps.
-- Employment distribution gaps.
-- KL divergence.
-- Chi-square goodness-of-fit p-values.
-- Average response score by race.
+### Adversarial Files
 
-Output:
+- `src/adversarial/generate_attacks.py`
+  - Creates synthetic attack documents.
+  - Current final mix is `high=2`, `medium=5`, `low=8`.
+  - High/medium docs are closer to trusted evidence; low docs contain unsupported, absolute, fake-stat, or injection-style content.
 
-- `data/outputs/bias_validation/model_comparison_report.json`
+- `src/adversarial/defense_decision.py`
+  - Core trust gate.
+  - Checks prompt injection, unsupported target claims, absolute language, fake stats, and alignment with trusted chunks.
+  - Uses an LLM judge when enabled.
+  - Produces `low`, `medium`, or `high` trust plus reasons.
 
-## 6. Persona + Generation Pipeline
+- `src/adversarial/validate_docs.py`
+  - Runs the defense gate on generated attack documents.
+  - Writes `data/outputs/attack/adversarial_validation_report.json`.
+  - Preserves intended trust labels so the notebook can compare intended vs detected trust.
 
-The persona pipeline generates synthetic respondents using ACS-weighted sampling.
+- `src/adversarial/run_attack_experiment.py`
+  - Runs clean retrieval vs defended retrieval.
+  - Builds poisoned vector stores only in controlled output locations.
+  - Reports response shift separately from poisoned-claim appearance.
+  - This matters because a shifted answer is not automatically a successful poisoned-claim adoption.
 
-Each persona includes:
+- `src/adversarial/upload_validate.py`
+  - Validates one or more uploaded files.
+  - Accepts trusted files, rejects malicious files, chunks accepted text, and indexes accepted chunks into the user-upload vector store.
+  - Writes `data/outputs/user_uploads/user_upload_validation_report.json`.
 
-- `persona_id`
-- `age_group`
-- `gender`
-- `race_ethnicity`
-- `income_bracket`
-- `education`
-- `employment_status`
-- `profile_text`
+### Attack Utility Files
 
-The response generation pipeline:
-
-1. Loads questions.
-2. Loads personas.
-3. Retrieves relevant RAG chunks.
-4. Builds a survey prompt containing persona + retrieved context.
-5. Calls Groq, OpenAI, or local generation.
-6. Writes structured output records.
-
-Output:
-
-- `data/outputs/generation/synthetic_responses.json`
-
-The generation CLI also supports an optional `--user-doc` path. In that mode, the document is parsed, lightly screened for prompt-injection and known adversarial-template overlap, then its chunks are prioritized in memory before trusted RAG fallback context. This path does not write the user document into the main vector store.
-
-## 7. Trusted RAG Pipeline
-
-The trusted RAG pipeline uses curated PDFs from:
-
-- `data/raw_sources/ecommerce/`
-- `data/raw_sources/finance/`
-- `data/raw_sources/healthcare/`
-
-The ingestion step:
-
-- discovers PDFs,
-- infers domain from folder name,
-- extracts page text,
-- cleans repeated headers and page numbers,
-- chunks text with overlap,
-- optionally adds visual summaries,
-- writes JSONL chunks.
-
-The embedding step:
-
-- loads `all-MiniLM-L6-v2` by default,
-- encodes chunk text,
-- normalizes embeddings,
-- writes a FAISS inner-product index,
-- writes matching metadata.
-
-The retrieval step:
-
-- embeds the query,
-- searches FAISS,
-- optionally filters by domain,
-- returns top-k chunk records.
-
-Primary outputs:
-
-- `data/rag_docs/rag_chunks.jsonl`
-- `vector_store/rag_index.faiss`
-- `vector_store/rag_metadata.json`
-
-## 8. Adversarial Testing
-
-The implemented adversarial path uses:
+- `src/attacks/poison_utils.py`
+  - Shared helpers for poisoned vector-store creation, lexical retrieval, tokenization, semantic shift, and CSV writing.
 
 - `src/attacks/run_attack.py`
-- `src/defense/defense.py`
+  - Older attack runner retained for compatibility.
+  - Prefer `src.adversarial.run_attack_experiment` for final results because it includes the newer trust-gated defense flow.
 
-The attack script:
+### Utility Files
 
-1. Starts from the clean trusted vector store.
-2. Creates poisoned chunks using adversarial templates.
-3. Appends poisoned chunks to a copied vector store.
-4. Generates baseline responses using clean retrieval.
-5. Generates attacked responses using poisoned retrieval.
-6. Computes semantic and keyword shift.
-7. Flags attack success when semantic shift is greater than the threshold.
+- `src/utils/acs_utils.py`
+  - Reads ACS CSV labels and samples weighted categories.
 
-Primary outputs:
+- `src/utils/doc_utils.py`
+  - Extracts clean text from supported uploaded/source documents.
 
-- `results/poisoned_vector_store/rag_index.faiss`
-- `results/poisoned_vector_store/rag_metadata.json`
-- `results/poisoned_vector_store/injected_documents.json`
-- `results/attack_responses.json`
-- `results/attack_responses.csv`
-- `results/attack_analysis.csv`
+- `src/utils/pdf_utils.py`
+  - Extracts text from PDF pages and detects visual-heavy pages.
 
-The defense script:
+- `src/utils/text_utils.py`
+  - Cleans text, chunks text, and extracts years from filenames.
 
-1. Loads attack response records.
-2. Loads clean trusted chunk IDs.
-3. Retrieves from the poisoned vector store.
-4. Separates trusted and untrusted chunks.
-5. Generates one response with poisoned context.
-6. Generates one response with trusted-only filtered context.
-7. Flags suspicious records when untrusted chunks appear or response divergence is high.
-8. Uses filtered context for suspicious records.
+- `src/utils/helpers.py`
+  - Central path helpers and JSON/JSONL read-write helpers.
+  - Keeps output folders consistent.
 
-Primary outputs:
+## What Each Pipeline Proves
 
-- `results/defense_results.json`
-- `results/defense_results.csv`
+### Bias Detection
 
-Important note:
+Shows whether generated synthetic survey datasets match ACS demographic benchmarks.
 
-Some older instruction docs mention newer modules such as `src.adversarial.generate_attacks`, `src.adversarial.run_attack_experiment`, and upload validation commands under `src.adversarial`. In this checkout, those files are not implemented, and `src/adversarial/validate_docs.py` is empty. Use the implemented `src.attacks.run_attack`, `src.defense.defense`, and `src.pipeline.document_pipeline` workflows unless those newer modules are restored.
+Final evidence:
 
-## 9. User Document Upload Pipeline
+- GPT baseline
+- DeepSeek baseline
+- ACS comparison metrics
+- demographic distribution visualizations in the notebook
 
-The standalone user document pipeline is implemented in:
+### RAG Grounding
+
+Shows whether retrieved evidence is relevant to Product X questions across finance, healthcare, and ecommerce.
+
+Final evidence:
+
+- retrieval files under `data/outputs/rag_validation/`
+- generated RAG survey responses under `data/outputs/generation/`
+- notebook metrics for groundedness, relevance, source coverage, and response length
+
+### Persona + Generation
+
+Shows that responses are produced for demographically structured personas, not generic anonymous users.
+
+Final evidence:
+
+- `data/personas/personas.json`
+- `data/outputs/generation/synthetic_responses.json`
+
+### Adversarial Testing
+
+Shows whether poisoned documents can influence generated answers and whether the defense prevents poisoned claims from appearing.
+
+Important interpretation:
+
+- `response_shift_rate` means the defended answer changed compared with the clean answer.
+- `poisoned_claim_rate` means the attack claim actually appeared in the defended answer.
+- A high response shift rate with a low poisoned claim rate means the defense changed behavior but blocked the malicious claim.
+
+### User Document Upload
+
+Shows that benign uploaded docs can be accepted while malicious uploaded docs are rejected.
+
+Final evidence:
+
+- 6 upload files tested
+- 4 benign accepted
+- 2 malicious rejected
+- accepted chunks indexed only after validation
+
+## Final `src` Execution Flow
+
+Use this order when running source files for final results:
 
 ```text
-src/pipeline/document_pipeline.py
+src.persona.generate_personas
+        |
+        v
+src.rag.ingest
+        |
+        v
+src.rag.embed
+        |
+        v
+src.rag.retrieve
+        |
+        v
+src.generation.generate_responses
+        |
+        v
+src.bias.generate_gpt_survey
+        |
+        v
+src.bias.generate_deepseek_survey
+        |
+        v
+src.bias.analyze_bias
+        |
+        v
+src.adversarial.generate_attacks
+        |
+        v
+src.adversarial.validate_docs
+        |
+        v
+src.adversarial.run_attack_experiment
+        |
+        v
+src.adversarial.upload_validate
+        |
+        v
+notebooks/project_results_analysis.ipynb
 ```
 
-It supports:
+Short version:
 
-- `.pdf`
-- `.txt`
-- `.md`
+```text
+ACS -> Personas -> Trusted Docs -> Chunks -> FAISS -> Retrieval -> RAG Responses
+ACS + Model Outputs -> Bias Analysis
+Attack Docs -> Defense Validation -> Attack Experiment
+User Docs -> Upload Validation -> Accepted User Context
+All Outputs -> Notebook Analysis
+```
 
-The upload flow:
-
-1. Parse the uploaded document.
-2. Clean and chunk the text.
-3. Build upload chunk metadata.
-4. Compare uploaded chunks against known adversarial templates.
-5. Reject the document if adversarial similarity exceeds the threshold.
-6. Append accepted chunks to the selected vector store.
-7. Retrieve uploaded chunks first for the current question.
-8. Fall back to general trusted chunks.
-9. Generate an answer from retrieved context.
-
-The current standalone pipeline defense is similarity-based. The `generate_responses --user-doc` path uses a lighter lexical guard for prompt-injection phrases and adversarial-template overlap. These paths do not yet implement the richer trust gate described in the older docs, such as LLM judge scoring, purpose consistency, or medium/high trust levels.
-
-## 10. Recommended Full Run Order
-
-Use this order for a clean end-to-end run:
-
-1. Set up environment.
-2. Generate personas.
-3. Ingest trusted RAG PDFs.
-4. Build FAISS vector store.
-5. Test retrieval.
-6. Generate RAG-backed survey responses.
-7. Generate GPT and DeepSeek synthetic survey datasets.
-8. Run bias analysis.
-9. Run adversarial attack simulation.
-10. Run defense pass.
-11. Run user document upload pipeline as needed.
-
-## 11. Known Gaps
-
-Current implementation gaps to remember:
-
-- `src/adversarial/validate_docs.py` is empty.
-- The old docs reference adversarial modules that are not currently present.
-- The current attack pipeline is clean vs poisoned, while the newer desired evaluation is clean vs poisoned without defense vs poisoned with defense.
-- User-upload validation is template-similarity based, not a full claim-support trust gate.
-- `config.yaml` is currently empty.
+Use `instruction_docs/FINAL_COMMANDS.md` for exact runnable commands and recommended final sample sizes.

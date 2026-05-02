@@ -66,7 +66,7 @@ Use shorter chunks so Product X context is more focused during retrieval.
 ```bash
 python -m src.rag.ingest \
   --chunk-size 450 \
-  --chunk-overlap 80
+  --chunk-overlap 90
 ```
 
 Output:
@@ -100,24 +100,27 @@ Run Product X retrieval checks for all three domains. These do not call an LLM.
 
 ```bash
 python -m src.rag.retrieve \
-  --query "What finance factors make customers trust or avoid Product X?" \
-  --top-k 5 \
+  --query "For Product X Finance, how do monthly cash flow, bill reminders, savings realism, debt pressure, privacy, and account-linking security affect whether this customer would choose the product?" \
+  --top-k 8 \
+  --min-score 0.18 \
   --domain finance \
   --output data/outputs/rag_validation/finance_retrieval_results.json
 ```
 
 ```bash
 python -m src.rag.retrieve \
-  --query "What healthcare factors make customers trust or avoid Product X?" \
-  --top-k 5 \
+  --query "For Product X Healthcare, how do insurance coverage, out-of-pocket cost estimates, provider availability, privacy protection, appointment preparation, and safety limitations affect whether this customer would choose the product?" \
+  --top-k 8 \
+  --min-score 0.18 \
   --domain healthcare \
   --output data/outputs/rag_validation/healthcare_retrieval_results.json
 ```
 
 ```bash
 python -m src.rag.retrieve \
-  --query "What ecommerce factors make customers trust or avoid Product X?" \
-  --top-k 5 \
+  --query "For Product X Ecommerce, how do transparent pricing, delivery reliability, return policy clarity, review trust, hidden fees, and buyer protection affect whether this customer would choose the product?" \
+  --top-k 8 \
+  --min-score 0.18 \
   --domain ecommerce \
   --output data/outputs/rag_validation/ecommerce_retrieval_results.json
 ```
@@ -139,7 +142,8 @@ python -m src.generation.generate_responses \
   --questions-file questions.txt \
   --personas data/personas/personas.json \
   --limit-personas 25 \
-  --top-k 5 \
+  --top-k 8 \
+  --min-similarity-score 0.18 \
   --provider openai \
   --model gpt-4.1-mini \
   --output data/outputs/generation/synthetic_responses.json
@@ -223,7 +227,7 @@ python -m src.adversarial.run_attack_experiment \
   --questions-file questions.txt \
   --personas data/personas/personas.json \
   --max-cases 40 \
-  --top-k 5 \
+  --top-k 8 \
   --provider openai \
   --model gpt-4.1-mini \
   --judge-timeout 20 \
@@ -276,7 +280,8 @@ python -m src.generation.generate_responses \
   --questions-file questions.txt \
   --personas data/personas/personas.json \
   --limit-personas 10 \
-  --top-k 5 \
+  --top-k 8 \
+  --min-similarity-score 0.18 \
   --user-doc data/user_docs/uploads/product_x_finance_budgeting.txt \
   --user-doc data/user_docs/uploads/product_x_finance_security.txt \
   --user-doc data/user_docs/uploads/product_x_ecommerce_trust.txt \

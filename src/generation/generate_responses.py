@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
+
+from dotenv import load_dotenv
 
 from src.attacks.poison_utils import build_adversarial_templates, tokenize
 from src.rag.embed import DEFAULT_MODEL
@@ -19,8 +22,30 @@ DEFAULT_LOCAL_ENDPOINT = "http://localhost:11434/api/chat"
 DEFAULT_LOCAL_MODEL = "llama3.1"
 DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
 DEFAULT_OPENAI_MODEL = "gpt-4.1-mini"
+DEFAULT_GENERATION_TEMPERATURE = 0.35
 GENERATION_PROVIDERS = ("groq", "local", "openai")
 ALLOWED_DOMAINS = ("ecommerce", "finance", "healthcare")
+
+load_dotenv(override=False)
+
+
+def infer_domain_from_question(question: str, domain: str | None = None) -> str | None:
+    if domain:
+        return domain
+    lowered = (question or "").lower()
+    for candidate in ALLOWED_DOMAINS:
+        if candidate in lowered:
+            return candidate
+    finance_terms = ("budget", "price", "cost", "financial", "finance", "security")
+    healthcare_terms = ("health", "healthcare", "patient", "medical", "care")
+    ecommerce_terms = ("ecommerce", "shopping", "purchase", "delivery", "return")
+    if any(term in lowered for term in finance_terms):
+        return "finance"
+    if any(term in lowered for term in healthcare_terms):
+        return "healthcare"
+    if any(term in lowered for term in ecommerce_terms):
+        return "ecommerce"
+    return None
 
 
 def load_persona(persona_json: str | None = None, persona_file: Path | None = None) -> dict | None:
@@ -72,19 +97,22 @@ def source_refs(chunks: list[dict]) -> list[dict]:
             "source_file": chunk.get("source_file"),
             "year": chunk.get("year"),
             "page_number": chunk.get("page_number"),
+            "similarity_score": chunk.get("similarity_score"),
+            "lexical_score": chunk.get("lexical_score"),
+            "hybrid_score": chunk.get("hybrid_score"),
         }
         for chunk in chunks
     ]
 
 
-def infer_user_doc_domain(domain: str | None, purpose: str | None) -> str:
+def infer_user_doc_domain(domain: str | None, purpose: str | None, fallback: str = "finance") -> str:
     if domain:
         return domain
     purpose_text = (purpose or "").lower()
     for candidate in ALLOWED_DOMAINS:
         if candidate in purpose_text:
             return candidate
-    return "finance"
+    return fallback
 
 
 def score_chunks_lexical(query: str, chunks: list[dict]) -> list[dict]:
@@ -181,7 +209,7 @@ def prepare_user_doc_chunks(
 
 def prepare_user_docs_chunks(
     user_docs: list[Path],
-    domain: str,
+    domain: str | None,
     purpose: str | None,
     adversarial_threshold: float,
     embedding_model_name: str = DEFAULT_MODEL,
@@ -191,9 +219,13 @@ def prepare_user_docs_chunks(
     rejected_documents: list[dict] = []
 
     for user_doc in user_docs:
+        user_doc_domain = infer_user_doc_domain(
+            domain=domain,
+            purpose=f"{purpose or ''} {user_doc.name}",
+        )
         chunks, validation = prepare_user_doc_chunks(
             user_doc=user_doc,
-            domain=domain,
+            domain=user_doc_domain,
             purpose=purpose,
             adversarial_threshold=adversarial_threshold,
             embedding_model_name=embedding_model_name,
@@ -207,7 +239,7 @@ def prepare_user_docs_chunks(
 
     validation_report = {
         "mode": "multi_user_doc_priority_retrieval",
-        "domain": domain,
+        "domain": domain or "inferred_per_document",
         "user_doc_purpose": purpose,
         "total_documents": len(user_docs),
         "accepted_documents": len(accepted_documents),
@@ -222,6 +254,35 @@ def prepare_user_docs_chunks(
     return accepted_chunks, validation_report
 
 
+def filter_chunks_by_domain(chunks: list[dict], domain: str | None) -> list[dict]:
+    if not domain:
+        return chunks
+    return [chunk for chunk in chunks if chunk.get("domain") == domain]
+
+
+def merge_clean_and_user_chunks(
+    clean_chunks: list[dict],
+    user_chunks: list[dict],
+    top_k: int,
+    max_user_chunks: int = 2,
+) -> list[dict]:
+    user_budget = min(max_user_chunks, len(user_chunks), max(top_k - 1, 0))
+    clean_budget = max(top_k - user_budget, 0)
+    selected: list[dict] = []
+    used_ids: set[str] = set()
+
+    for chunk in clean_chunks[:clean_budget] + user_chunks[:user_budget] + clean_chunks[clean_budget:]:
+        chunk_id = str(chunk.get("chunk_id") or "")
+        if chunk_id in used_ids:
+            continue
+        selected.append(chunk)
+        used_ids.add(chunk_id)
+        if len(selected) >= top_k:
+            break
+
+    return selected
+
+
 def normalize_user_doc_path(path: Path) -> Path:
     if path.exists():
         return path
@@ -229,7 +290,12 @@ def normalize_user_doc_path(path: Path) -> Path:
     return normalized if normalized.exists() else path
 
 
-def generate_with_groq(prompt: str, model: str = DEFAULT_GROQ_MODEL, max_output_tokens: int = 500) -> str:
+def generate_with_groq(
+    prompt: str,
+    model: str = DEFAULT_GROQ_MODEL,
+    max_output_tokens: int = 500,
+    temperature: float = DEFAULT_GENERATION_TEMPERATURE,
+) -> str:
     try:
         from groq import Groq
     except ImportError as exc:
@@ -239,14 +305,18 @@ def generate_with_groq(prompt: str, model: str = DEFAULT_GROQ_MODEL, max_output_
     completion = client.chat.completions.create(
         model=model,
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.7,
+        temperature=temperature,
         max_completion_tokens=max_output_tokens,
     )
     return (completion.choices[0].message.content or "").strip()
 
 
-def generate_with_openai(prompt: str, model: str = DEFAULT_OPENAI_MODEL, max_output_tokens: int = 500) -> str:
-    import os
+def generate_with_openai(
+    prompt: str,
+    model: str = DEFAULT_OPENAI_MODEL,
+    max_output_tokens: int = 500,
+    temperature: float = DEFAULT_GENERATION_TEMPERATURE,
+) -> str:
     from openai import OpenAI
     client = OpenAI(
         api_key=os.environ.get("OPENAI_API_KEY"),
@@ -255,7 +325,7 @@ def generate_with_openai(prompt: str, model: str = DEFAULT_OPENAI_MODEL, max_out
     response = client.chat.completions.create(
         model=model,
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.7,
+        temperature=temperature,
         max_tokens=max_output_tokens,
     )
     return response.choices[0].message.content.strip()
@@ -266,12 +336,13 @@ def generate_with_local(
     model: str = DEFAULT_LOCAL_MODEL,
     endpoint: str = DEFAULT_LOCAL_ENDPOINT,
     max_output_tokens: int = 500,
+    temperature: float = DEFAULT_GENERATION_TEMPERATURE,
 ) -> str:
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "stream": False,
-        "options": {"temperature": 0.7, "num_predict": max_output_tokens},
+        "options": {"temperature": temperature, "num_predict": max_output_tokens},
     }
     request = Request(
         endpoint,
@@ -298,48 +369,70 @@ def call_generation_model(
     model: str | None = None,
     local_endpoint: str = DEFAULT_LOCAL_ENDPOINT,
     max_output_tokens: int = 500,
+    temperature: float = DEFAULT_GENERATION_TEMPERATURE,
 ) -> str:
     if provider == "groq":
-        return generate_with_groq(prompt, model=model or DEFAULT_GROQ_MODEL, max_output_tokens=max_output_tokens)
+        return generate_with_groq(
+            prompt,
+            model=model or DEFAULT_GROQ_MODEL,
+            max_output_tokens=max_output_tokens,
+            temperature=temperature,
+        )
     if provider == "local":
         return generate_with_local(
             prompt,
             model=model or DEFAULT_LOCAL_MODEL,
             endpoint=local_endpoint,
             max_output_tokens=max_output_tokens,
+            temperature=temperature,
         )
     if provider == "openai":
-        return generate_with_openai(prompt, model=model or DEFAULT_OPENAI_MODEL, max_output_tokens=max_output_tokens)
+        return generate_with_openai(
+            prompt,
+            model=model or DEFAULT_OPENAI_MODEL,
+            max_output_tokens=max_output_tokens,
+            temperature=temperature,
+        )
     raise ValueError("Unsupported generation provider. Expected 'groq', 'local', or 'openai'.")
 
 
 def generate_response(
     question: str,
     domain: str | None = None,
-    top_k: int = 5,
+    top_k: int = 8,
     persona: dict | None = None,
     provider: str = "groq",
     model: str | None = None,
     local_endpoint: str = DEFAULT_LOCAL_ENDPOINT,
     user_doc_chunks: list[dict] | None = None,
     user_doc_validation: dict | None = None,
+    min_similarity_score: float | None = 0.18,
+    temperature: float = DEFAULT_GENERATION_TEMPERATURE,
     dry_run: bool = False,
 ) -> dict:
+    retrieval_domain = infer_domain_from_question(question, domain=domain)
+    retrieval_query = f"Survey question: {question}"
     if user_doc_chunks:
-        prioritized_user_chunks = score_chunks_lexical(question, user_doc_chunks)
-        clean_chunks = retrieve_chunks(query=question, top_k=top_k, domain=domain)
-        used_ids: set[str] = set()
-        chunks = []
-        for chunk in prioritized_user_chunks + clean_chunks:
-            chunk_id = str(chunk.get("chunk_id") or "")
-            if chunk_id in used_ids:
-                continue
-            chunks.append(chunk)
-            used_ids.add(chunk_id)
-            if len(chunks) >= top_k:
-                break
+        domain_user_chunks = filter_chunks_by_domain(user_doc_chunks, retrieval_domain)
+        prioritized_user_chunks = score_chunks_lexical(question, domain_user_chunks)
+        clean_chunks = retrieve_chunks(
+            query=retrieval_query,
+            top_k=top_k,
+            domain=retrieval_domain,
+            min_score=min_similarity_score,
+        )
+        chunks = merge_clean_and_user_chunks(
+            clean_chunks=clean_chunks,
+            user_chunks=prioritized_user_chunks,
+            top_k=top_k,
+        )
     else:
-        chunks = retrieve_chunks(query=question, top_k=top_k, domain=domain)
+        chunks = retrieve_chunks(
+            query=retrieval_query,
+            top_k=top_k,
+            domain=retrieval_domain,
+            min_score=min_similarity_score,
+        )
     retrieved_context = format_retrieved_context(chunks)
     prompt = build_survey_response_prompt(
         question=question,
@@ -352,17 +445,22 @@ def generate_response(
         provider=provider,
         model=model,
         local_endpoint=local_endpoint,
+        temperature=temperature,
     )
 
     return {
         "persona_id": persona.get("persona_id") if persona else None,
         "question": question,
         "domain": domain,
+        "retrieval_domain": retrieval_domain,
+        "retrieval_query": retrieval_query,
         "persona": persona,
         "provider": provider,
         "model": model,
         "top_k": top_k,
+        "temperature": temperature,
         "retrieved_sources": source_refs(chunks),
+        "retrieved_context": retrieved_context,
         "user_doc_validation": user_doc_validation,
         "prompt": prompt,
         "response": response_text,
@@ -374,12 +472,14 @@ def generate_responses(
     questions: list[str],
     personas: list[dict],
     domain: str | None = None,
-    top_k: int = 5,
+    top_k: int = 8,
     provider: str = "groq",
     model: str | None = None,
     local_endpoint: str = DEFAULT_LOCAL_ENDPOINT,
     user_doc_chunks: list[dict] | None = None,
     user_doc_validation: dict | None = None,
+    min_similarity_score: float | None = 0.18,
+    temperature: float = DEFAULT_GENERATION_TEMPERATURE,
     dry_run: bool = False,
 ) -> list[dict]:
     records: list[dict] = []
@@ -396,6 +496,8 @@ def generate_responses(
                     local_endpoint=local_endpoint,
                     user_doc_chunks=user_doc_chunks,
                     user_doc_validation=user_doc_validation,
+                    min_similarity_score=min_similarity_score,
+                    temperature=temperature,
                     dry_run=dry_run,
                 )
             )
@@ -407,13 +509,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--question", action="append", help="Survey question to answer. Can be provided multiple times.")
     parser.add_argument("--questions-file", type=Path, help="Text file with one question per line, or JSON list.")
     parser.add_argument("--domain", choices=("ecommerce", "finance", "healthcare"), help="Optional RAG domain filter.")
-    parser.add_argument("--top-k", type=int, default=5, help="Number of RAG chunks to retrieve.")
+    parser.add_argument("--top-k", type=int, default=8, help="Number of RAG chunks to retrieve.")
+    parser.add_argument(
+        "--min-similarity-score",
+        type=float,
+        default=0.18,
+        help="Minimum retrieval similarity score. Use 0 to disable filtering.",
+    )
     parser.add_argument("--persona-json", help="Optional persona as a JSON object string.")
     parser.add_argument("--persona-file", type=Path, help="Optional JSONL persona file. Uses the first record.")
     parser.add_argument("--personas", type=Path, default=personas_path(), help="Personas JSON file.")
     parser.add_argument("--limit-personas", type=int, help="Only generate for the first N personas.")
     parser.add_argument("--provider", default="groq", choices=GENERATION_PROVIDERS, help="Generation provider.")
     parser.add_argument("--model", default=None, help="Generation model. Defaults depend on provider.")
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=DEFAULT_GENERATION_TEMPERATURE,
+        help="Generation temperature. Lower values usually improve grounding.",
+    )
     parser.add_argument("--local-endpoint", default=DEFAULT_LOCAL_ENDPOINT, help="Local Ollama-compatible chat endpoint.")
     parser.add_argument(
         "--user-doc",
@@ -472,11 +586,9 @@ def main() -> None:
         missing_docs = [path for path in args.user_doc if not path.exists()]
         if missing_docs:
             raise FileNotFoundError(f"User document does not exist: {missing_docs[0]}")
-        user_doc_domain = infer_user_doc_domain(args.domain, args.user_doc_purpose)
-        generation_domain = generation_domain or user_doc_domain
         user_doc_chunks, user_doc_validation = prepare_user_docs_chunks(
             user_docs=args.user_doc,
-            domain=user_doc_domain,
+            domain=args.domain,
             purpose=args.user_doc_purpose,
             adversarial_threshold=args.adversarial_threshold,
             embedding_model_name=args.embedding_model,
@@ -492,6 +604,8 @@ def main() -> None:
         local_endpoint=args.local_endpoint,
         user_doc_chunks=user_doc_chunks,
         user_doc_validation=user_doc_validation,
+        min_similarity_score=args.min_similarity_score if args.min_similarity_score > 0 else None,
+        temperature=args.temperature,
         dry_run=args.dry_run,
     )
     write_json(args.output, records)

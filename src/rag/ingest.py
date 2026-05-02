@@ -84,7 +84,7 @@ def build_text_file_chunks(
     source_path: Path,
     domain: str,
     chunk_size: int = 450,
-    chunk_overlap: int = 80,
+    chunk_overlap: int = 90,
 ) -> list[dict]:
     file_name = source_path.name
     year = extract_year(file_name)
@@ -121,7 +121,7 @@ def build_pdf_chunks(
     pdf_path: Path,
     domain: str,
     chunk_size: int = 450,
-    chunk_overlap: int = 80,
+    chunk_overlap: int = 90,
     include_visual_summaries: bool = False,
     vision_provider: str = "groq",
     vision_model: str | None = None,
@@ -207,7 +207,7 @@ def build_pdf_chunks(
 
 def build_chunks(
     chunk_size: int = 450,
-    chunk_overlap: int = 80,
+    chunk_overlap: int = 90,
     input_paths: list[Path] | None = None,
     domain: str | None = None,
     include_visual_summaries: bool = False,
@@ -247,7 +247,7 @@ def merge_chunks(existing_chunks: list[dict], new_chunks: list[dict]) -> list[di
 
 def ingest_documents(
     chunk_size: int = 450,
-    chunk_overlap: int = 80,
+    chunk_overlap: int = 90,
     output_path: Path | None = None,
     input_paths: list[Path] | None = None,
     domain: str | None = None,
@@ -281,7 +281,7 @@ def ingest_documents(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build JSONL chunks from curated RAG PDFs.")
     parser.add_argument("--chunk-size", type=int, default=450, help="Chunk size in words.")
-    parser.add_argument("--chunk-overlap", type=int, default=80, help="Chunk overlap in words.")
+    parser.add_argument("--chunk-overlap", type=int, default=90, help="Chunk overlap in words.")
     parser.add_argument(
         "--input",
         type=Path,
