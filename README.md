@@ -124,8 +124,6 @@ Large data artifacts are not tracked in git because `data/`, `vector_store/`, PD
 
 After downloading, extract the bundle into the repository root so paths such as `data/raw_sources/`, `data/personas/`, `data/user_docs/`, and `data/outputs/` are available. Then follow the execution process below to rebuild chunks, vectors, validation outputs, and notebook metrics.
 
-The Product X domain documents are synthetic company-style context documents, not real proprietary company data. We used synthetic finance, ecommerce, and healthcare product context to test realistic RAG survey behavior without exposing confidential company strategy, customer insights, pricing, or internal research to a student project or hosted LLM APIs.
-
 Run from the repository root.
 
 ```bash
